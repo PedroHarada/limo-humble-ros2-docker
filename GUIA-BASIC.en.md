@@ -14,12 +14,27 @@ Once, on the host:
 
 ```bash
 cd ~/limo-docker
+./setup.sh
 docker compose build
 ```
 
-This takes a few minutes (the `osrf/ros:humble-desktop-full` base image is
-several GB). Afterwards, with the container running, the workspace has to be
-compiled once — see section 3.
+`setup.sh` does three things, and is idempotent (safe to re-run):
+
+1. Detects your user's UID/GID and this machine's `video` and `render` group
+   GIDs, writing them to `.env`. These numbers vary across distributions, and
+   they are what gives the container GPU access and correct file ownership.
+2. Makes sure the X authority file exists (using the correct `$XAUTHORITY`,
+   which on GNOME/Wayland is not `~/.Xauthority`).
+3. Clones `limo_ros2` into `ws/src/` and applies the fixes from
+   `patches/limo_ros2-fixes.patch`. **Without this step there is nothing to
+   build** — this repository does not version the robot's source, only the patch.
+
+Run `setup.sh` from a terminal in your graphical session, otherwise it cannot
+find out the `DISPLAY`.
+
+`docker compose build` takes a few minutes (the `osrf/ros:humble-desktop-full`
+base image is several GB). Afterwards, with the container running, the workspace
+has to be compiled once — see section 3.
 
 ## 2. Daily routine
 

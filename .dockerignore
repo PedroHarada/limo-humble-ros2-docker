@@ -1,0 +1,7 @@
+# O Dockerfile nao faz COPY/ADD: nada precisa ser enviado ao daemon.
+# Sem isto, o workspace inteiro (centenas de MB) viaja a cada build.
+ws/
+.git/
+patches/
+*.md
+.env

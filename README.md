@@ -19,6 +19,7 @@ conectada. O Gazebo roda com Real Time Factor 1.00 na GPU integrada.
 .
 ├── Dockerfile
 ├── docker-compose.yml
+├── setup.sh            # prepara .env, X11 e o clone corrigido do limo_ros2
 ├── GUIA-BASIC.md       # como usar (PT)
 ├── GUIA-BASIC.en.md    # como usar (EN)
 ├── README.md           # este arquivo: decisões e correções (PT)
@@ -27,8 +28,11 @@ conectada. O Gazebo roda com Real Time Factor 1.00 na GPU integrada.
 │   └── limo_ros2-fixes.patch
 └── ws/
     └── src/
-        └── limo_ros2/  # clone do upstream, com 8 correções
+        └── limo_ros2/  # clonado pelo setup.sh, não versionado aqui
 ```
+
+Para montar o ambiente numa máquina nova: `./setup.sh` e depois
+`docker compose build`. Os detalhes estão no [GUIA-BASIC.md](GUIA-BASIC.md).
 
 ---
 
@@ -312,7 +316,47 @@ Sem isso, o mesmo sumiço se repetiria no patch gerado a partir deste clone.
 
 ---
 
-# Parte 3 — Versionamento
+# Parte 3 — Portabilidade
+
+O ambiente foi montado numa máquina específica (Pop!_OS, COSMIC sobre Wayland,
+GPU integrada Intel). Três coisas dependem da máquina, e todas passam pelo
+`.env` gerado pelo `setup.sh`:
+
+| Variável | O que é | Por que varia |
+|---|---|---|
+| `USER_UID` / `USER_GID` | dono dos arquivos e identidade perante o Xwayland | o primeiro usuário costuma ser 1000, mas não sempre |
+| `VIDEO_GID` / `RENDER_GID` | acesso a `/dev/dri/*` | muda entre distribuições (aqui 44 e 992; no Ubuntu 24.04 o render costuma ser 993) |
+| `XAUTH_FILE` | arquivo de autoridade do X | em GNOME/Wayland é `/run/user/<uid>/.mutter-Xwaylandauth.*`, não `~/.Xauthority` |
+
+O `docker-compose.yml` lê essas variáveis com os valores desta máquina como
+default (`${RENDER_GID:-992}`), então ele continua funcionando aqui mesmo sem o
+`.env` — mas em outra máquina o `setup.sh` é obrigatório.
+
+## O que ainda pode dar errado em outro ambiente
+
+- **Sem `/dev/dri`** (VM, WSL, servidor headless): o `docker compose up`
+  **falha**, não degrada. O `setup.sh` avisa. A saída é remover a seção
+  `devices:` e aceitar renderização por software.
+- **GPU NVIDIA**: `/dev/dri` existe, mas aceleração real exige o
+  `nvidia-container-toolkit` e configuração de runtime, que este ambiente não
+  faz.
+- **Autorização do X**: a conclusão de que o `xhost` é dispensável vale para
+  compositores que usam a regra `SI:localuser:` — é o caso do COSMIC daqui.
+  Outros autorizam de outro jeito. Se o Gazebo reclamar de display, o
+  `xhost +SI:localuser:root` resolve na hora, e aí vale investigar como aquele
+  compositor autoriza.
+- **Docker Desktop (macOS/Windows)**: `network_mode: host` e o socket X11 do
+  Linux não se aplicam. Este ambiente pressupõe Docker Engine em Linux.
+
+## `.dockerignore`
+
+O `Dockerfile` não tem nenhum `COPY` ou `ADD` — a imagem é montada só com `apt`.
+Sem `.dockerignore`, o `docker compose build` enviava o diretório inteiro (259 MB
+com o workspace compilado) ao daemon a cada build, sem usar nada disso.
+
+---
+
+# Parte 4 — Versionamento
 
 Duas camadas de git, de propósito:
 
@@ -327,7 +371,7 @@ protege de um `git checkout` acidental.
 
 **A ponte entre as duas:** `patches/limo_ros2-fixes.patch`, versionado no repo de
 cima. Ele torna este repositório autossuficiente — não é preciso fork do
-`limo_ros2`. Para reproduzir o ambiente do zero:
+`limo_ros2`. Reproduzir o ambiente do zero é rodar `./setup.sh`, que faz:
 
 ```bash
 cd ws/src
@@ -336,7 +380,8 @@ cd limo_ros2
 git am < ../../../patches/limo_ros2-fixes.patch
 ```
 
-Se o upstream mudar e o `git am` recusar, `git apply --3way` costuma resolver.
+Se o upstream mudar e o `git am` recusar, o `setup.sh` tenta `git am --3way`
+automaticamente antes de desistir.
 
 Ao alterar o `limo_ros2` daqui em diante, commite na branch `humble-fixes` e
 regenere o patch:
@@ -348,7 +393,7 @@ git format-patch dcc5a86 --stdout > ../../../patches/limo_ros2-fixes.patch
 
 ---
 
-# Parte 4 — Método de diagnóstico
+# Parte 5 — Método de diagnóstico
 
 Vale registrar porque o mesmo caminho serve para o próximo problema.
 

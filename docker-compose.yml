@@ -3,35 +3,42 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: limo-humble:latest
-    container_name: limo_dev
+      args:
+        # UID/GID do host, para os arquivos do bind mount nascerem com o dono
+        # certo e para o Xwayland autorizar o container (SI:localuser)
+        USER_UID: ${USER_UID:-1000}
+        USER_GID: ${USER_GID:-1000}
+    image: ${IMAGE_NAME:-limo-humble:latest}
+    container_name: ${CONTAINER_NAME:-limo_dev}
 
-    # host: mesmo stack DDS do host, sem NAT. O isolamento em relação ao
-    # container ros2-docker (Jazzy, ROS_DOMAIN_ID=0) vem do ROS_DOMAIN_ID=42.
+    # host: mesmo stack DDS do host, sem NAT. O isolamento em relação a outros
+    # containers ROS na máquina vem exclusivamente do ROS_DOMAIN_ID.
     network_mode: host
     ipc: host
 
     volumes:
       - ./ws:/home/limo/ws
       - /tmp/.X11-unix:/tmp/.X11-unix
-      - ${HOME}/.Xauthority:/home/limo/.Xauthority
+      # XAUTH_FILE é resolvido pelo setup.sh: em GNOME/Wayland o arquivo de
+      # autoridade não é ~/.Xauthority, e sim o .mutter-Xwaylandauth em /run
+      - ${XAUTH_FILE:-${HOME}/.Xauthority}:/home/limo/.Xauthority
 
     environment:
       DISPLAY: ${DISPLAY}
       QT_X11_NO_MITSHM: "1"
       XAUTHORITY: /home/limo/.Xauthority
-      ROS_DOMAIN_ID: "42"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
 
     # aceleração gráfica via Mesa (GPU integrada)
     devices:
       - /dev/dri:/dev/dri
 
-    # GIDs de video e render DO HOST: o container roda como UID 1000 (não root),
-    # então precisa pertencer a esses grupos para abrir /dev/dri/*.
-    # Conferir com: getent group video render
+    # GIDs de video e render DO HOST: o container roda como usuário comum e
+    # precisa pertencer a esses grupos para abrir /dev/dri/*.
+    # Os números variam entre distribuições -- o setup.sh os lê da máquina.
     group_add:
-      - "44"
-      - "992"
+      - "${VIDEO_GID:-44}"
+      - "${RENDER_GID:-992}"
 
     stdin_open: true
     tty: true
