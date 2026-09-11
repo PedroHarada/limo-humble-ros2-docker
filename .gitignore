@@ -1,0 +1,8 @@
+# colcon build artifacts
+ws/build/
+ws/install/
+ws/log/
+
+# limo_ros2 is a clone with its own git repository; the fixes applied to it
+# live in patches/limo_ros2-fixes.patch, which is versioned here
+ws/src/limo_ros2/

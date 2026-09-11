@@ -1,0 +1,38 @@
+services:
+  limo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: limo-humble:latest
+    container_name: limo_dev
+
+    # host: mesmo stack DDS do host, sem NAT. O isolamento em relação ao
+    # container ros2-docker (Jazzy, ROS_DOMAIN_ID=0) vem do ROS_DOMAIN_ID=42.
+    network_mode: host
+    ipc: host
+
+    volumes:
+      - ./ws:/home/limo/ws
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ${HOME}/.Xauthority:/home/limo/.Xauthority
+
+    environment:
+      DISPLAY: ${DISPLAY}
+      QT_X11_NO_MITSHM: "1"
+      XAUTHORITY: /home/limo/.Xauthority
+      ROS_DOMAIN_ID: "42"
+
+    # aceleração gráfica via Mesa (GPU integrada)
+    devices:
+      - /dev/dri:/dev/dri
+
+    # GIDs de video e render DO HOST: o container roda como UID 1000 (não root),
+    # então precisa pertencer a esses grupos para abrir /dev/dri/*.
+    # Conferir com: getent group video render
+    group_add:
+      - "44"
+      - "992"
+
+    stdin_open: true
+    tty: true
+    command: bash

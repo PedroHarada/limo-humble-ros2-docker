@@ -1,0 +1,342 @@
+From 21328abaf08e92a9ea5da607195945622c735e05 Mon Sep 17 00:00:00 2001
+From: Pedro Harada <pedroyujiharada@gmail.com>
+Date: Fri, 11 Sep 2026 17:34:46 -0300
+Subject: [PATCH] Fix build and runtime failures on ROS 2 Humble + Gazebo
+ Classic
+
+The package did not build, and once building, the simulation started with
+no robot in it. Seven independent defects, three blocking the build and
+four only visible at runtime.
+
+Build:
+- CMakeLists.txt: install(DIRECTORY ...) listed log/ and src/, which do not
+  exist in the package, aborting CMake.
+- package.xml: <depend>rviz</depend> is the ROS 1 package name; rosdep
+  cannot resolve it on ROS 2. Use rviz2.
+- package.xml: <depend>libgazebo_ros</depend> exists neither as a ROS
+  package nor as a rosdep key. Use gazebo_ros.
+
+Runtime:
+- ackermann_with_sensor.xacro: the file included ackermann.xacro, which
+  only DEFINES the limo_ackermann macro, but never instantiated it. The
+  generated URDF contained the sensors and their joints parented to a
+  base_link that was never created, so robot_state_publisher aborted with
+  "Failed to build tree" and nothing ever published /robot_description.
+  spawn_entity then waited forever on "Waiting for entity xml".
+- ackermann.xacro: the base_footprint link and base_joint were commented
+  out, while the Gazebo plugin (robot_base_frame) and gazebo.rviz (Fixed
+  Frame) both reference that frame. tf2 ended up with two unconnected
+  trees and RViz rendered nothing.
+- ackermann_gazebo.launch.py: world_path was passed to ackermann.launch.py,
+  which ignores it; the include that actually starts Gazebo received no
+  arguments, so the world file was dead code.
+- worlds/empty_world.model: referenced by the launch file but missing from
+  the repository. Added, with a closed room and obstacles so the lidar has
+  something to detect.
+
+Usability:
+- sensor.xacro: set an explicit frame_name on the lidar plugin. Without it
+  Gazebo lumps laser_link into base_link (fixed joint) and /scan is
+  published with the wrong frame_id.
+- rviz/gazebo.rviz: add a RobotModel display; the upstream config has no
+  display that draws the robot.
+- .gitignore: the "*.mod*" rule swallows worlds/*.model, which is most
+  likely why empty_world.model never reached the repository.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_0184gfpVifSX9zuaLAdJhmXh
+---
+ .gitignore                                  |   5 +
+ limo_car/CMakeLists.txt                     |   2 +-
+ limo_car/gazebo/ackermann.xacro             |   7 +-
+ limo_car/gazebo/ackermann_with_sensor.xacro |   4 +
+ limo_car/gazebo/sensor.xacro                |   3 +
+ limo_car/launch/ackermann_gazebo.launch.py  |   3 +-
+ limo_car/package.xml                        |   4 +-
+ limo_car/rviz/gazebo.rviz                   |  26 +++++
+ limo_car/worlds/empty_world.model           | 122 ++++++++++++++++++++
+ 9 files changed, 170 insertions(+), 6 deletions(-)
+ create mode 100644 limo_car/worlds/empty_world.model
+
+diff --git a/.gitignore b/.gitignore
+index 669992e..e81c89d 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -297,3 +297,8 @@ dmypy.json
+ 
+ # Cython debug symbols
+ cython_debug/
++
++# The "*.mod*" rule above swallows worlds/*.model, which is most likely
++# why empty_world.model never reached the repository even though the launch
++# file references it.
++!limo_car/worlds/*.model
+diff --git a/limo_car/CMakeLists.txt b/limo_car/CMakeLists.txt
+index 8dde2f4..caa54e46 100644
+--- a/limo_car/CMakeLists.txt
++++ b/limo_car/CMakeLists.txt
+@@ -24,7 +24,7 @@ if(BUILD_TESTING)
+ endif()
+ 
+ install(
+-  DIRECTORY launch  gazebo log meshes rviz src urdf worlds 
++  DIRECTORY launch gazebo meshes rviz urdf worlds
+   DESTINATION share/${PROJECT_NAME}
+ )
+ 
+diff --git a/limo_car/gazebo/ackermann.xacro b/limo_car/gazebo/ackermann.xacro
+index 531fb3f..e68f3c2 100644
+--- a/limo_car/gazebo/ackermann.xacro
++++ b/limo_car/gazebo/ackermann.xacro
+@@ -225,13 +225,16 @@ Es würde einfach in andere Datei angerufen werden. -->
+     <!-- erstellt Hauptanteil des Modells, definiert ein Nullpunkt, um Modell aufzubauen. Es ist einfach für weitere
+     Darstellungspostion in Simulation-Umgebung -->
+     <xacro:macro name="limo_ackermann">
+-        <!-- <link name="base_footprint"/>
++        <!-- raiz da árvore TF: sem este par o robot_state_publisher publica a
++             partir de base_link, enquanto o plugin do Gazebo publica a partir
++             de base_footprint, e o tf2 fica com duas árvores desconexas -->
++        <link name="base_footprint"/>
+ 
+         <joint name="base_joint" type="fixed">
+             <parent link="base_footprint"/>
+             <child link="base_link"/>
+             <origin xyz="0.0 0.0 0.15" rpy="0 0 0"/>
+-        </joint> -->
++        </joint>
+ 
+         <!-- herstellt base_link -->
+         <link name="base_link">
+diff --git a/limo_car/gazebo/ackermann_with_sensor.xacro b/limo_car/gazebo/ackermann_with_sensor.xacro
+index 85300f8..4173148 100644
+--- a/limo_car/gazebo/ackermann_with_sensor.xacro
++++ b/limo_car/gazebo/ackermann_with_sensor.xacro
+@@ -11,6 +11,10 @@ andere Sensoren zusammengebaut werden und laden sie das Modell in Gazebo.-->
+     <xacro:include filename="$(find limo_car)/gazebo/ackermann.xacro" />
+     <xacro:include filename="$(find limo_car)/gazebo/sensor.xacro" />
+ 
++    <!-- ************************* Chassi ****************************** -->
++    <!-- ackermann.xacro apenas DEFINE a macro; sem esta chamada o URDF sai
++         só com os sensores e os joints ficam sem base_link -->
++    <xacro:limo_ackermann />
+ 
+     <!-- ************************* Laser ****************************** -->
+     <xacro:gazebo_laser frame_prefix="laser" />
+diff --git a/limo_car/gazebo/sensor.xacro b/limo_car/gazebo/sensor.xacro
+index f0cbceb..32ddfa0 100644
+--- a/limo_car/gazebo/sensor.xacro
++++ b/limo_car/gazebo/sensor.xacro
+@@ -73,6 +73,9 @@ realisierbar elektrische Komponente, also Sensoren aus Gazebo-Package. Diese Ant
+                     </ros>
+                     <output_type>sensor_msgs/LaserScan</output_type>
+                     <min_intensity>150.0</min_intensity>
++                    <!-- sem isto o Gazebo colapsa o laser_link (joint fixo) dentro
++                         do base_link e o /scan sai com frame_id errado -->
++                    <frame_name>${frame_prefix}_link</frame_name>
+                 </plugin>
+             </sensor>
+         </gazebo>
+diff --git a/limo_car/launch/ackermann_gazebo.launch.py b/limo_car/launch/ackermann_gazebo.launch.py
+index 08b93e3..326c504 100755
+--- a/limo_car/launch/ackermann_gazebo.launch.py
++++ b/limo_car/launch/ackermann_gazebo.launch.py
+@@ -48,13 +48,14 @@ def generate_launch_description():
+     mbot = IncludeLaunchDescription(
+         PythonLaunchDescriptionSource([os.path.join(
+             get_package_share_directory(package_name),'launch', 'ackermann.launch.py'
+-        )]), launch_arguments={'use_sim_time': 'true', 'world': world_path}.items()
++        )]), launch_arguments={'use_sim_time': 'true'}.items()
+     )
+ 
+     # Einbindung der Gazebo-Startdatei, die im gazebo_ros-Paket enthalten ist
+     gazebo = IncludeLaunchDescription(
+         PythonLaunchDescriptionSource([os.path.join(
+             get_package_share_directory('gazebo_ros'), 'launch', 'gazebo.launch.py')]),
++        launch_arguments={'world': world_path}.items()
+     )
+ 
+     # laufen ein leere node aus den gazebo_ros package
+diff --git a/limo_car/package.xml b/limo_car/package.xml
+index f44c9ab..e385bf7 100644
+--- a/limo_car/package.xml
++++ b/limo_car/package.xml
+@@ -17,9 +17,9 @@
+   <depend>joint_state_publisher</depend>
+   <depend>joint_state_publisher_gui</depend>
+   <depend>xacro</depend>
+-  <depend>rviz</depend>
++  <depend>rviz2</depend>
+   <depend>gazebo</depend>
+-  <depend>libgazebo_ros</depend>
++  <depend>gazebo_ros</depend>
+   <depend>rqt_robot_steering</depend>
+   
+   <export>
+diff --git a/limo_car/rviz/gazebo.rviz b/limo_car/rviz/gazebo.rviz
+index 9ea2d17..4d88c86 100644
+--- a/limo_car/rviz/gazebo.rviz
++++ b/limo_car/rviz/gazebo.rviz
+@@ -48,6 +48,32 @@ Visualization Manager:
+       Plane Cell Count: 10
+       Reference Frame: <Fixed Frame>
+       Value: true
++    - Alpha: 1
++      Class: rviz_default_plugins/RobotModel
++      Collision Enabled: false
++      Description File: ""
++      Description Source: Topic
++      Description Topic:
++        Depth: 5
++        Durability Policy: Transient Local
++        History Policy: Keep Last
++        Reliability Policy: Reliable
++        Value: /robot_description
++      Enabled: true
++      Links:
++        All Links Enabled: true
++        Expand Joint Details: false
++        Expand Link Details: false
++        Expand Tree: false
++        Link Tree Style: Links in Alphabetic Order
++      Mass Properties:
++        Inertia: false
++        Mass: false
++      Name: RobotModel
++      TF Prefix: ""
++      Update Interval: 0
++      Value: true
++      Visual Enabled: true
+     - Alpha: 1
+       Autocompute Intensity Bounds: true
+       Autocompute Value Bounds:
+diff --git a/limo_car/worlds/empty_world.model b/limo_car/worlds/empty_world.model
+new file mode 100644
+index 0000000..dd5dbcb
+--- /dev/null
++++ b/limo_car/worlds/empty_world.model
+@@ -0,0 +1,122 @@
++<?xml version="1.0" ?>
++<!-- Mundo de testes do LIMO: ground plane, sol, uma sala fechada de 10x10 m e
++     alguns obstáculos internos. As paredes dão ao lidar o que enxergar e criam
++     quinas suficientes para SLAM e Nav2 fecharem loop. -->
++<sdf version="1.6">
++  <world name="default">
++
++    <include>
++      <uri>model://sun</uri>
++    </include>
++
++    <include>
++      <uri>model://ground_plane</uri>
++    </include>
++
++    <scene>
++      <shadows>false</shadows>
++    </scene>
++
++    <!-- ****************** Paredes da sala (10 x 10 m) ****************** -->
++    <model name="wall_north">
++      <static>true</static>
++      <pose>0 5 0.5 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
++          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <model name="wall_south">
++      <static>true</static>
++      <pose>0 -5 0.5 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
++          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <model name="wall_east">
++      <static>true</static>
++      <pose>5 0 0.5 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
++          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <model name="wall_west">
++      <static>true</static>
++      <pose>-5 0 0.5 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
++          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <!-- ****************** Obstaculos internos ****************** -->
++    <!-- assimétricos de propósito: dão features distintas para o scan matcher -->
++    <model name="pillar_a">
++      <static>true</static>
++      <pose>2.0 1.5 0.4 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>0.6 0.6 0.8</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>0.6 0.6 0.8</size></box></geometry>
++          <material><ambient>0.3 0.4 0.6 1</ambient><diffuse>0.4 0.5 0.7 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <model name="pillar_b">
++      <static>true</static>
++      <pose>-2.5 -1.0 0.4 0 0 0.5</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><box><size>1.2 0.4 0.8</size></box></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><box><size>1.2 0.4 0.8</size></box></geometry>
++          <material><ambient>0.3 0.4 0.6 1</ambient><diffuse>0.4 0.5 0.7 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++    <model name="cylinder_c">
++      <static>true</static>
++      <pose>-1.0 3.0 0.4 0 0 0</pose>
++      <link name="link">
++        <collision name="collision">
++          <geometry><cylinder><radius>0.35</radius><length>0.8</length></cylinder></geometry>
++        </collision>
++        <visual name="visual">
++          <geometry><cylinder><radius>0.35</radius><length>0.8</length></cylinder></geometry>
++          <material><ambient>0.5 0.35 0.25 1</ambient><diffuse>0.6 0.45 0.3 1</diffuse></material>
++        </visual>
++      </link>
++    </model>
++
++  </world>
++</sdf>
+-- 
+2.43.0
+
