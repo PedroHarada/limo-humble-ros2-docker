@@ -15,6 +15,9 @@ Validated end to end: the LIMO shows up in Gazebo, RViz renders the model and
 the laser, the robot responds to `/cmd_vel`, odometry accumulates and the TF
 tree is connected. Gazebo runs at Real Time Factor 1.00 on the integrated GPU.
 
+`slam_toolbox` is validated as well: driving the robot around the room builds
+the map in RViz, with the walls and the three obstacles carved out.
+
 ```
 .
 ├── Dockerfile
@@ -28,7 +31,8 @@ tree is connected. Gazebo runs at Real Time Factor 1.00 on the integrated GPU.
 │   └── limo_ros2-fixes.patch
 └── ws/
     └── src/
-        └── limo_ros2/  # cloned by setup.sh, not versioned here
+        ├── limo_ros2/  # cloned by setup.sh, not versioned here
+        └── limo_slam/  # slam_toolbox configuration (versioned here)
 ```
 
 To set the environment up on a new machine: `./setup.sh`, then
@@ -318,7 +322,71 @@ clone.
 
 ---
 
-# Part 3 — Portability
+# Part 3 — SLAM (the `limo_slam` package)
+
+`slam_toolbox` configuration for mapping the simulated world. Usage lives in
+[GUIA-BASIC.en.md](GUIA-BASIC.en.md); the decisions live here.
+
+## Why a separate package instead of putting it in `limo_car`
+
+`limo_car` is AgileX's code. Anything added there would land in
+`patches/limo_ros2-fixes.patch`, mixing bug fixes with new functionality and
+making both patch review and future upstream updates harder.
+
+Since this repository's `.gitignore` only excludes `ws/src/limo_ros2/`, a
+package under `ws/src/limo_slam/` is versioned here directly, with no patch
+involved.
+
+```
+ws/src/limo_slam/
+├── config/mapper_params_online_async.yaml
+├── launch/slam.launch.py
+└── rviz/slam.rviz
+```
+
+## Why `online_async` and not `sync`
+
+Synchronous mode blocks waiting for each scan to be processed before accepting
+the next one. With Gazebo, RViz and SLAM competing for the same CPU, the queue
+grows and the map comes out blurry. The asynchronous mode drops scans when it
+cannot keep up, which for teleoperated mapping is the desirable behaviour — and
+it is the mode `slam_toolbox` itself recommends for this case.
+
+## Parameters that differ from the defaults, and why
+
+| Parameter | Default | Here | Reason |
+|---|---|---|---|
+| `base_frame` | `base_footprint` | `base_footprint` | it matches, but this is the frame that only exists because fix 7 restored it |
+| `max_laser_range` | `20.0` | `8.0` | the URDF's lidar reaches 8 m; at 20 the SLAM would treat as valid readings the sensor never produces |
+| `resolution` | `0.05` | `0.05` | 5 cm per cell, suitable for a 10x10 m room |
+| `minimum_travel_distance` | `0.5` | `0.1` | the LIMO is small and slow; at 0.5 m a lap around the room would discard almost every scan |
+| `minimum_travel_heading` | `0.5` | `0.1` | same reason, for rotation |
+| `scan_buffer_maximum_scan_distance` | `10.0` | `8.0` | consistency with the sensor's actual range |
+| `use_sim_time` | `false` | `true` | time comes from Gazebo's `/clock` |
+
+## The launch file does not start Gazebo
+
+`slam.launch.py` starts only `slam_toolbox` and an RViz. The simulation runs in
+another terminal.
+
+That is deliberate: tuning SLAM parameters is a trial-and-error loop, and
+restarting SLAM without tearing down the world, the robot and its current pose
+saves a lot of time. The price is one extra terminal and a second RViz window —
+which can be turned off with `rviz:=false`.
+
+## What the simulation imposes on mapping
+
+**240° field of view.** `sensor.xacro` sets `min_angle`/`max_angle` to ±2.094
+rad. This is not a 360° lidar: the robot is blind behind, and mapping well
+requires covering the room in both directions. That comes from the real LIMO's
+model, it is not a configuration mistake.
+
+**Odometry that is too good.** The Gazebo plugin publishes `odom` from the
+simulation's ground truth pose, without the slippage a real robot has. The map
+tends to come out better than it would on physical hardware — worth keeping in
+mind before trusting these parameters on the real thing.
+
+# Part 4 — Portability
 
 This environment was built on a specific machine (Pop!_OS, COSMIC on Wayland,
 integrated Intel GPU). Three things depend on the machine, and all of them go
@@ -359,7 +427,7 @@ using none of it.
 
 ---
 
-# Part 4 — Version control
+# Part 5 — Version control
 
 Two layers of git, on purpose:
 
@@ -397,7 +465,7 @@ git format-patch dcc5a86 --stdout > ../../../patches/limo_ros2-fixes.patch
 
 ---
 
-# Part 5 — Debugging method
+# Part 6 — Debugging method
 
 Worth recording, because the same path will serve the next problem.
 
@@ -443,7 +511,7 @@ where the problem actually was.
 
 # Suggested next steps
 
-1. `slam_toolbox` in online async mode to map the room.
+1. ~~`slam_toolbox` to map the room~~ — done, the `limo_slam` package (Part 3).
 2. Save the map and bring up Nav2 with AMCL.
 3. Tune Nav2 for ackermann kinematics — the defaults assume differential drive,
    and the LIMO cannot rotate in place.

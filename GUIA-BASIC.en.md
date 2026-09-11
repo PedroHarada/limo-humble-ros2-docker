@@ -131,7 +131,81 @@ With linear velocity at **zero**, moving the angular does nothing. A car with
 steering cannot rotate in place: the wheels turn, but it does not move. Give it
 linear velocity first, then steer.
 
-## 6. Inspecting what is going on
+## 6. Mapping the room with SLAM
+
+The `limo_slam` package ships `slam_toolbox` already configured for this robot.
+It belongs to your workspace, not to AgileX's upstream.
+
+Build it once (it is a new package, so `--symlink-install` does not spare you
+the build):
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_slam
+source install/setup.bash
+```
+
+With the **simulation already running** in another terminal:
+
+```bash
+ros2 launch limo_slam slam.launch.py
+```
+
+This starts `slam_toolbox` and a **second** RViz window, with Fixed Frame set to
+`map` and the map display on. The RViz that came with the simulation stays on
+`base_footprint` and does not show the map — feel free to minimize it.
+
+Accepted arguments:
+
+| Argument | Default | What it does |
+|---|---|---|
+| `rviz:=false` | `true` | start SLAM only, without the second RViz |
+| `use_sim_time:=false` | `true` | only makes sense with a real robot |
+| `params_file:=/path/x.yaml` | the package's | try parameters without editing the original |
+
+Check that it is up:
+
+```bash
+ros2 topic hz /map                    # publishes every ~5 s
+ros2 run tf2_ros tf2_echo map odom    # the link slam_toolbox adds
+```
+
+Now drive (section 5) and watch the map grow in RViz.
+
+### How to drive for a good map
+
+**The lidar sees 240°, not 360°.** In `sensor.xacro` the field of view runs from
+-2.09 to +2.09 rad: the LIMO sees ahead and to the sides, and is blind behind.
+Driving only forward leaves holes — go around the room in both directions.
+
+**Go slow.** The scan matcher matches consecutive scans; high speed with an 8 Hz
+lidar produces large jumps between readings, and the map comes out skewed.
+
+**Standing still, nothing happens.** With `minimum_travel_distance: 0.1`, a new
+scan is only processed every 10 cm travelled. That is deliberate: processing
+scans while the robot is parked only piles up noise.
+
+### Saving the map
+
+```bash
+mkdir -p ~/ws/maps
+ros2 run nav2_map_server map_saver_cli -f ~/ws/maps/sala
+```
+
+This produces `sala.pgm` (the image) and `sala.yaml` (resolution, origin and
+thresholds). Since `~/ws` is the bind mount, both show up on the host under
+`~/limo-docker/ws/maps/`, owned by your user. They are Nav2's input later on.
+
+### If the map comes out bad
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| Empty map, nothing shows | SLAM is not getting `/scan`, or there is no TF | `ros2 topic hz /scan` and `ros2 run tf2_ros tf2_echo map odom` |
+| Duplicated or "ghost" walls | odometry slipping, scan matcher losing the match | drive slower; revisit an already mapped stretch to trigger loop closure |
+| Map only grows in front of the robot | the 240° field of view | cover the room in both directions |
+| Map does not update while driving | inconsistent `use_sim_time` across nodes | all of them need `use_sim_time: true`; check with `ros2 param get /slam_toolbox use_sim_time` |
+
+## 7. Inspecting what is going on
 
 | Goal | Command |
 |---|---|
@@ -156,7 +230,7 @@ Main simulation topics:
 | `/depth_camera/image_raw` | depth camera |
 | `/tf`, `/tf_static` | transform tree |
 
-## 7. Editing the scene
+## 8. Editing the scene
 
 The world lives in `ws/src/limo_ros2/limo_car/worlds/empty_world.model` and can
 be edited on the host with any editor. It contains a closed 10x10 m room, two
@@ -168,7 +242,7 @@ a shape and click on the ground. They disappear when Gazebo closes.
 For a file edit to take effect, relaunch — the world is only read when
 `gzserver` starts.
 
-## 8. Common problems
+## 9. Common problems
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
@@ -181,7 +255,7 @@ For a file edit to take effect, relaunch — the world is only read when
 | `groups: cannot find name for group ID 992` | the `render` group has no name inside the container | cosmetic, ignore |
 | ALSA error messages | no sound card in the container | cosmetic, ignore |
 
-## 9. Where things live
+## 10. Where things live
 
 | On the host | In the container |
 |---|---|

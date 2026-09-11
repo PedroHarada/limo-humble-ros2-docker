@@ -1,0 +1,80 @@
+# slam_toolbox em modo online assincrono, ajustado para o LIMO simulado.
+# Os valores marcados com "[ajuste]" diferem do default do pacote.
+slam_toolbox:
+  ros__parameters:
+
+    # ------------------------------------------------------------ solver
+    solver_plugin: solver_plugins::CeresSolver
+    ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
+    ceres_preconditioner: SCHUR_JACOBI
+    ceres_trust_strategy: LEVENBERG_MARQUARDT
+    ceres_dogleg_type: TRADITIONAL_DOGLEG
+    ceres_loss_function: None
+
+    # ------------------------------------------------------------- frames
+    odom_frame: odom
+    map_frame: map
+    # [ajuste] o URDF do limo_car tem base_footprint como raiz, e e o frame
+    # que o plugin do Gazebo usa como robot_base_frame
+    base_frame: base_footprint
+    scan_topic: /scan
+
+    mode: mapping
+    # [ajuste] tempo da simulacao, nao o relogio de parede
+    use_sim_time: true
+
+    debug_logging: false
+    throttle_scans: 1
+    transform_publish_period: 0.02
+    map_update_interval: 5.0
+
+    # [ajuste] 5 cm por celula: adequado a uma sala de 10x10 m
+    resolution: 0.05
+    # [ajuste] o lidar do URDF tem alcance de 8 m. O default de 20 faria o
+    # SLAM tratar como validas leituras que o sensor nunca produz
+    max_laser_range: 8.0
+
+    minimum_time_interval: 0.5
+    transform_timeout: 0.2
+    tf_buffer_duration: 30.0
+    stack_size_to_use: 40000000
+    enable_interactive_mode: true
+
+    # ------------------------------------------------------------- geral
+    use_scan_matching: true
+    use_scan_barycenter: true
+    # [ajuste] o LIMO e pequeno e anda devagar; com os defaults (0.5 m e
+    # 0.5 rad) uma volta inteira pela sala descartaria quase todos os scans
+    minimum_travel_distance: 0.1
+    minimum_travel_heading: 0.1
+    scan_buffer_size: 10
+    # [ajuste] coerente com o alcance real do sensor
+    scan_buffer_maximum_scan_distance: 8.0
+    link_match_minimum_response_fine: 0.1
+    link_scan_maximum_distance: 1.5
+    loop_search_maximum_distance: 3.0
+    do_loop_closing: true
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ------------------------------------------------------ correlacao
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+
+    # -------------------------------------------------- fechamento de loop
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03
+
+    # ----------------------------------------------------- scan matcher
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true

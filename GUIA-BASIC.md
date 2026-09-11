@@ -129,7 +129,81 @@ Com a velocidade linear em **zero**, mexer no angular não faz nada. Um carro co
 direção não gira parado: as rodas viram, mas ele não sai do lugar. Dê velocidade
 linear primeiro, depois esterce.
 
-## 6. Inspecionar o que está acontecendo
+## 6. Mapear a sala com SLAM
+
+O pacote `limo_slam` traz o `slam_toolbox` já configurado para este robô. Ele é
+do seu workspace, não do upstream do AgileX.
+
+Compilar, uma vez só (é um pacote novo, o `--symlink-install` não dispensa o
+build):
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_slam
+source install/setup.bash
+```
+
+Com a **simulação já rodando** em outro terminal:
+
+```bash
+ros2 launch limo_slam slam.launch.py
+```
+
+Isso sobe o `slam_toolbox` e uma **segunda** janela do RViz, com Fixed Frame em
+`map` e o display do mapa. A janela do RViz que veio junto com a simulação
+continua em `base_footprint` e não mostra o mapa — pode minimizá-la.
+
+Argumentos aceitos:
+
+| Argumento | Padrão | Para que serve |
+|---|---|---|
+| `rviz:=false` | `true` | sobe só o SLAM, sem abrir o segundo RViz |
+| `use_sim_time:=false` | `true` | só faria sentido com robô real |
+| `params_file:=/caminho/x.yaml` | o do pacote | testar parâmetros sem editar o original |
+
+Confira que está de pé:
+
+```bash
+ros2 topic hz /map                    # publica a cada ~5 s
+ros2 run tf2_ros tf2_echo map odom    # o elo que o slam_toolbox acrescenta
+```
+
+Agora é dirigir (seção 5) e ver o mapa crescer no RViz.
+
+### Como dirigir para sair um mapa bom
+
+**O lidar enxerga 240°, não 360°.** No `sensor.xacro` o campo de visão vai de
+-2.09 a +2.09 rad: o LIMO vê à frente e aos lados, e é cego atrás. Andar só para
+a frente deixa buracos — dê a volta pela sala nos dois sentidos.
+
+**Vá devagar.** O scan matcher casa scans consecutivos; velocidade alta com
+lidar a 8 Hz produz saltos grandes entre leituras, e o mapa sai torto.
+
+**Parado, nada acontece.** Com `minimum_travel_distance: 0.1`, um scan novo só é
+processado a cada 10 cm percorridos. É de propósito: processar scans com o robô
+parado só acumula ruído.
+
+### Salvar o mapa
+
+```bash
+mkdir -p ~/ws/maps
+ros2 run nav2_map_server map_saver_cli -f ~/ws/maps/sala
+```
+
+Gera `sala.pgm` (a imagem) e `sala.yaml` (resolução, origem e limiares). Como
+`~/ws` é o bind mount, os dois aparecem no host em `~/limo-docker/ws/maps/`, com
+o seu usuário. São a entrada do Nav2 depois.
+
+### Se o mapa sair ruim
+
+| Sintoma | Causa provável | O que fazer |
+|---|---|---|
+| Mapa vazio, nada aparece | o SLAM não recebe `/scan` ou não há TF | `ros2 topic hz /scan` e `ros2 run tf2_ros tf2_echo map odom` |
+| Paredes duplicadas ou "fantasmas" | odometria escorregando, scan matcher perdendo o casamento | dirija mais devagar; volte a um trecho já mapeado para forçar fechamento de loop |
+| Mapa só cresce à frente do robô | o campo de visão de 240° | percorra a sala nos dois sentidos |
+| Mapa não atualiza enquanto ando | `use_sim_time` incoerente entre os nós | todos precisam de `use_sim_time: true`; confira com `ros2 param get /slam_toolbox use_sim_time` |
+
+## 7. Inspecionar o que está acontecendo
 
 | Objetivo | Comando |
 |---|---|
@@ -154,7 +228,7 @@ Tópicos principais da simulação:
 | `/depth_camera/image_raw` | câmera de profundidade |
 | `/tf`, `/tf_static` | árvore de transformadas |
 
-## 7. Editar o cenário
+## 8. Editar o cenário
 
 O mundo fica em `ws/src/limo_ros2/limo_car/worlds/empty_world.model` e pode ser
 editado no host, com qualquer editor. Contém uma sala fechada de 10x10 m, dois
@@ -166,7 +240,7 @@ uma forma e clique no chão. Some ao fechar o Gazebo.
 Para que uma edição no arquivo valha, relance o launch — o mundo só é lido
 quando o `gzserver` sobe.
 
-## 8. Problemas comuns
+## 9. Problemas comuns
 
 | Sintoma | Causa provável | O que fazer |
 |---|---|---|
@@ -179,7 +253,7 @@ quando o `gzserver` sobe.
 | `groups: cannot find name for group ID 992` | grupo `render` sem nome dentro do container | cosmético, ignore |
 | Mensagens de erro do ALSA | container sem placa de som | cosmético, ignore |
 
-## 9. Onde ficam as coisas
+## 10. Onde ficam as coisas
 
 | No host | No container |
 |---|---|
