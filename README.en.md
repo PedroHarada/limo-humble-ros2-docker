@@ -79,7 +79,7 @@ investigating how X works on this machine.
 
 ```
 access control enabled, only authorized clients can connect
-SI:localuser:pedroyujiharada
+SI:localuser:<your-user>
 ```
 
 In other words, **there is no authentication cookie** (`~/.Xauthority` did not
