@@ -9,3 +9,6 @@ ws/src/limo_ros2/
 
 # gerado pelo setup.sh, com os IDs desta maquina
 .env
+
+# documento didatico local, nao versionado
+DOCKER.md
