@@ -203,7 +203,66 @@ o seu usuário. São a entrada do Nav2 depois.
 | Mapa só cresce à frente do robô | o campo de visão de 240° | percorra a sala nos dois sentidos |
 | Mapa não atualiza enquanto ando | `use_sim_time` incoerente entre os nós | todos precisam de `use_sim_time: true`; confira com `ros2 param get /slam_toolbox use_sim_time` |
 
-## 7. Inspecionar o que está acontecendo
+## 7. Navegar com Nav2
+
+O pacote `limo_nav2` traz o Nav2 configurado para este robô: AMCL para
+localização contra um mapa salvo, costmaps 2D a partir do `/scan`, e o
+controlador `RegulatedPurePursuitController` no lugar do `DWB` padrão — o
+`DWB` assume tração diferencial e giraria o robô no lugar, o que o LIMO
+(Ackermann) não faz.
+
+**Pré-requisito:** um mapa salvo (seção 6). O launch usa `~/ws/maps/sala.yaml`
+por padrão.
+
+Compilar, uma vez só:
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_nav2
+source install/setup.bash
+```
+
+Com a **simulação já rodando** em outro terminal (relance-a do zero se o robô
+não estiver mais na origem — o mapa foi salvo com o robô partindo de (0,0,0),
+e o Nav2 assume essa mesma pose inicial):
+
+```bash
+ros2 launch limo_nav2 nav2.launch.py
+```
+
+Isso sobe o `map_server`, o `amcl`, os costmaps local e global, o
+`planner_server`, o `controller_server`, o `bt_navigator` (via
+`nav2_bringup`) e um RViz com a ferramenta **Nav2 Goal**. Diferente do
+`slam.launch.py`, o robô já nasce localizado — não é preciso o "2D Pose
+Estimate" manual.
+
+Argumentos aceitos:
+
+| Argumento | Padrão | Para que serve |
+|---|---|---|
+| `map:=/caminho/outro.yaml` | `~/ws/maps/sala.yaml` | usar outro mapa salvo |
+| `params_file:=/caminho/x.yaml` | o do pacote | testar parâmetros sem editar o original |
+| `rviz:=false` | `true` | sobe só o Nav2, sem abrir o RViz |
+| `use_sim_time:=false` | `true` | só faria sentido com robô real |
+
+Para mandar o robô a um destino: clique **Nav2 Goal** na barra de ferramentas
+do RViz, depois clique e arraste no mapa (arrastar define a orientação final).
+Confira que está de pé:
+
+```bash
+ros2 topic list | grep navigate_to_pose    # a acao do bt_navigator
+ros2 lifecycle get /amcl                   # deve responder "active"
+```
+
+### Se o robô não sai do lugar
+
+| Sintoma | Causa provável | O que fazer |
+|---|---|---|
+| `RegulatedPurePursuitController detected collision ahead!` em loop, sem mover | o mapa tem "paredes fantasmas" perto do robô (mapeamento apressado ou incompleto) | refaça o mapeamento (seção 6) dirigindo mais devagar e dando a volta completa na sala |
+| Nunca sai do estado `active` esperado, ou os tópicos de `/amcl` não aparecem | a pose inicial fixa (0,0,0) não bate com a pose real do robô | relance a simulação do zero (`ros2 launch limo_car ackermann_gazebo.launch.py`) antes do Nav2, para o robô voltar à origem |
+| Objetivo aceito mas cancela logo depois | objetivo fora da área mapeada, ou dentro de um obstáculo inflado | escolha um ponto mais central no mapa, longe das paredes |
+
+## 8. Inspecionar o que está acontecendo
 
 | Objetivo | Comando |
 |---|---|
@@ -228,7 +287,7 @@ Tópicos principais da simulação:
 | `/depth_camera/image_raw` | câmera de profundidade |
 | `/tf`, `/tf_static` | árvore de transformadas |
 
-## 8. Editar o cenário
+## 9. Editar o cenário
 
 O mundo fica em `ws/src/limo_ros2/limo_car/worlds/empty_world.model` e pode ser
 editado no host, com qualquer editor. Contém uma sala fechada de 10x10 m, dois
@@ -240,7 +299,7 @@ uma forma e clique no chão. Some ao fechar o Gazebo.
 Para que uma edição no arquivo valha, relance o launch — o mundo só é lido
 quando o `gzserver` sobe.
 
-## 9. Problemas comuns
+## 10. Problemas comuns
 
 | Sintoma | Causa provável | O que fazer |
 |---|---|---|
@@ -253,7 +312,7 @@ quando o `gzserver` sobe.
 | `groups: cannot find name for group ID 992` | grupo `render` sem nome dentro do container | cosmético, ignore |
 | Mensagens de erro do ALSA | container sem placa de som | cosmético, ignore |
 
-## 10. Onde ficam as coisas
+## 11. Onde ficam as coisas
 
 | No host | No container |
 |---|---|

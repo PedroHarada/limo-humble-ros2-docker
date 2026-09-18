@@ -205,7 +205,65 @@ thresholds). Since `~/ws` is the bind mount, both show up on the host under
 | Map only grows in front of the robot | the 240° field of view | cover the room in both directions |
 | Map does not update while driving | inconsistent `use_sim_time` across nodes | all of them need `use_sim_time: true`; check with `ros2 param get /slam_toolbox use_sim_time` |
 
-## 7. Inspecting what is going on
+## 7. Navigating with Nav2
+
+The `limo_nav2` package brings Nav2 configured for this robot: AMCL for
+localization against a saved map, 2D costmaps built from `/scan`, and the
+`RegulatedPurePursuitController` in place of the default `DWB` — `DWB`
+assumes differential drive and would try to rotate the robot in place, which
+the LIMO (Ackermann) cannot do.
+
+**Prerequisite:** a saved map (section 6). The launch defaults to
+`~/ws/maps/sala.yaml`.
+
+Build it once:
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_nav2
+source install/setup.bash
+```
+
+With the **simulation already running** in another terminal (relaunch it from
+scratch if the robot is no longer at the origin — the map was saved with the
+robot starting at (0,0,0), and Nav2 assumes that same initial pose):
+
+```bash
+ros2 launch limo_nav2 nav2.launch.py
+```
+
+This brings up `map_server`, `amcl`, the local and global costmaps,
+`planner_server`, `controller_server`, `bt_navigator` (via `nav2_bringup`),
+and an RViz with the **Nav2 Goal** tool. Unlike `slam.launch.py`, the robot is
+already localized on startup — no manual "2D Pose Estimate" needed.
+
+Accepted arguments:
+
+| Argument | Default | What it is for |
+|---|---|---|
+| `map:=/path/other.yaml` | `~/ws/maps/sala.yaml` | use a different saved map |
+| `params_file:=/path/x.yaml` | the package's own | test parameters without editing the original |
+| `rviz:=false` | `true` | bring up only Nav2, without opening RViz |
+| `use_sim_time:=false` | `true` | would only make sense with a real robot |
+
+To send the robot to a destination: click **Nav2 Goal** in the RViz toolbar,
+then click and drag on the map (dragging sets the final orientation). Check
+that it is up:
+
+```bash
+ros2 topic list | grep navigate_to_pose    # the bt_navigator action
+ros2 lifecycle get /amcl                   # should answer "active"
+```
+
+### If the robot does not move
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| `RegulatedPurePursuitController detected collision ahead!` looping, no movement | the map has "ghost walls" near the robot (rushed or incomplete mapping) | redo the mapping (section 6), driving slower and covering the whole room |
+| `/amcl` topics never show the expected `active` state | the fixed initial pose (0,0,0) does not match the robot's real pose | relaunch the simulation from scratch (`ros2 launch limo_car ackermann_gazebo.launch.py`) before Nav2, so the robot returns to the origin |
+| Goal accepted but cancels right after | goal outside the mapped area, or inside an inflated obstacle | pick a more central point on the map, away from the walls |
+
+## 8. Inspecting what is going on
 
 | Goal | Command |
 |---|---|
@@ -230,7 +288,7 @@ Main simulation topics:
 | `/depth_camera/image_raw` | depth camera |
 | `/tf`, `/tf_static` | transform tree |
 
-## 8. Editing the scene
+## 9. Editing the scene
 
 The world lives in `ws/src/limo_ros2/limo_car/worlds/empty_world.model` and can
 be edited on the host with any editor. It contains a closed 10x10 m room, two
@@ -242,7 +300,7 @@ a shape and click on the ground. They disappear when Gazebo closes.
 For a file edit to take effect, relaunch — the world is only read when
 `gzserver` starts.
 
-## 9. Common problems
+## 10. Common problems
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
@@ -255,7 +313,7 @@ For a file edit to take effect, relaunch — the world is only read when
 | `groups: cannot find name for group ID 992` | the `render` group has no name inside the container | cosmetic, ignore |
 | ALSA error messages | no sound card in the container | cosmetic, ignore |
 
-## 10. Where things live
+## 11. Where things live
 
 | On the host | In the container |
 |---|---|

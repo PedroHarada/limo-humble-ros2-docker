@@ -18,6 +18,11 @@ tree is connected. Gazebo runs at Real Time Factor 1.00 on the integrated GPU.
 `slam_toolbox` is validated as well: driving the robot around the room builds
 the map in RViz, with the walls and the three obstacles carved out.
 
+Nav2 is validated end to end too: with a saved map and the robot at the
+origin, `limo_nav2` localizes (AMCL), plans and executes a `NavigateToPose`
+to the destination using the `RegulatedPurePursuitController` — tested via
+`ros2 action send_goal`, with no manual intervention.
+
 ```
 .
 ├── Dockerfile
@@ -32,7 +37,8 @@ the map in RViz, with the walls and the three obstacles carved out.
 └── ws/
     └── src/
         ├── limo_ros2/  # cloned by setup.sh, not versioned here
-        └── limo_slam/  # slam_toolbox configuration (versioned here)
+        ├── limo_slam/  # slam_toolbox configuration (versioned here)
+        └── limo_nav2/  # Nav2 configuration (versioned here)
 ```
 
 To set the environment up on a new machine: `./setup.sh`, then
@@ -386,7 +392,100 @@ simulation's ground truth pose, without the slippage a real robot has. The map
 tends to come out better than it would on physical hardware — worth keeping in
 mind before trusting these parameters on the real thing.
 
-# Part 4 — Portability
+# Part 4 — Nav2 (the `limo_nav2` package)
+
+Nav2 configuration to navigate autonomously with the simulated LIMO, using a
+map saved by `slam_toolbox`. Usage is in [GUIA-BASIC.en.md](GUIA-BASIC.en.md);
+the decisions live here.
+
+```
+ws/src/limo_nav2/
+├── config/nav2_params.yaml
+├── launch/nav2.launch.py
+└── rviz/nav2.rviz
+```
+
+## Why reuse `nav2_bringup`'s `bringup_launch.py`
+
+`nav2_bringup` already handles container composition
+(`component_container_isolated`), the activation order of the
+`lifecycle_manager`s (localization first, then navigation) and the default
+behavior tree. Rebuilding that by hand would diverge from an upstream-maintained
+package for no gain — `limo_nav2/launch/nav2.launch.py` only declares the
+arguments specific to this robot (map path, `params_file`) and includes
+`bringup_launch.py` with them, the same way `ackermann_gazebo.launch.py`
+includes `gazebo_ros`'s `gazebo.launch.py`.
+
+## `nav2_params.yaml` starts from `nav2_bringup`'s default template
+
+Copied straight out of the image itself
+(`/opt/ros/humble/share/nav2_bringup/params/nav2_params.yaml`) and adjusted,
+with every deviation marked `# [adjusted]` in the file. The main ones:
+
+| Parameter | Default | Here | Why |
+|---|---|---|---|
+| `*.robot_base_frame` / `amcl.base_frame_id` | `base_link` | `base_footprint` | same frame the Gazebo Ackermann plugin and `limo_slam` already use — see fix 7 in Part 2 |
+| `amcl.laser_max_range` | `100.0` | `8.0` | actual range of the simulated lidar (`sensor.xacro`) |
+| `amcl.set_initial_pose` / `initial_pose` | off | `(0, 0, 0)` | the robot always spawns at that pose (fixed `spawn_x/y/z/yaw` in `ackermann_gazebo.launch.py`), and it is the same origin used by the saved map — skips the manual "2D Pose Estimate" in RViz |
+| `local_costmap.plugins` | `voxel_layer` (3D, assumes a depth camera feeding the costmap) | `obstacle_layer` (2D) | this robot only has a 2D lidar feeding the costmap; keeping `voxel_layer` would be unused complexity |
+| `*.robot_radius` | `0.22` (TurtleBot radius) | `0.18` | half the LIMO chassis diagonal (`base_x_size`/`base_y_size` = 0.19x0.31, from `ackermann.xacro`) |
+| `controller_server.FollowPath.plugin` | `dwb_core::DWBLocalPlanner` | `nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController` | see next section |
+| `velocity_smoother.max_velocity` | `[0.26, 0.0, 1.0]` (TurtleBot) | `[0.3, 0.0, 1.0]` | same ceiling suggested in `GUIA-BASIC.en.md` for teleop |
+
+## Why `RegulatedPurePursuitController` instead of the default `DWB`
+
+`DWB` evaluates trajectories by sampling independent linear and angular
+velocities, which includes rotating in place — natural for differential
+drive, but something the LIMO simply cannot do: as `GUIA-BASIC.en.md`
+documents ("Ackermann quirk"), with zero linear velocity the angular command
+does nothing. Running `DWB` for navigation would have the behavior tree
+attempting alignments the robot ignores, until it hits `Controller patience
+exceeded`.
+
+`RegulatedPurePursuitController` follows a lookahead point on the planned
+path, with `use_rotate_to_heading: false` and a `min_turning_radius` derived
+from the robot's real kinematics:
+
+```
+min_turning_radius = wheelbase / tan(max_steer)
+                    = 0.24 / tan(0.5236 rad)
+                    ≈ 0.42 m
+```
+
+`wheelbase` and `max_steer` come from `ackermann.xacro` (the `wheelbase`
+property and the `max_steer` parameter of the
+`libgazebo_ros_ackermann_drive.so` plugin). The controller never requests a
+turn tighter than the robot can physically make.
+
+`allow_reversing: false` was kept — reversing with simultaneous steering was
+not validated against this controller, and no current use of the robot needs
+it.
+
+## `amcl.robot_model_type` stays `DifferentialMotionModel`
+
+Nav2 has no dedicated Ackermann motion model. `DifferentialMotionModel` is
+the usual approximation (it assumes the robot does not slip sideways, which
+holds for both diff-drive and Ackermann) — an approximation, not an exact
+model of the LIMO's kinematics, but it is what upstream Nav2 offers.
+
+## Validation
+
+Tested end to end in this environment: a map generated and saved with
+`slam_toolbox`, the simulation relaunched from scratch (robot back at the
+origin, consistent with AMCL's fixed initial pose), `limo_nav2` brought up,
+and a goal sent via `ros2 action send_goal /navigate_to_pose ...` — the robot
+planned, followed the path, and the action finished with `SUCCEEDED`.
+
+Found during testing, not a defect in the package: bringing up Nav2
+**without** restarting the simulation after driving the robot during mapping
+makes AMCL's fixed initial pose (always `(0,0,0)`) diverge from the robot's
+real pose (wherever driving left it). The symptom is
+`RegulatedPurePursuitController detected collision ahead!` in a loop, because
+the local costmap gets evaluated from a wrong `map → odom` transform. The fix
+is to always relaunch `ackermann_gazebo.launch.py` from scratch before Nav2 —
+documented in section 7 of `GUIA-BASIC.en.md`.
+
+# Part 5 — Portability
 
 This environment was built on a specific machine (Pop!_OS, COSMIC on Wayland,
 integrated Intel GPU). Three things depend on the machine, and all of them go
@@ -427,7 +526,7 @@ using none of it.
 
 ---
 
-# Part 5 — Version control
+# Part 6 — Version control
 
 Two layers of git, on purpose:
 
@@ -465,7 +564,7 @@ git format-patch dcc5a86 --stdout > ../../../patches/limo_ros2-fixes.patch
 
 ---
 
-# Part 6 — Debugging method
+# Part 7 — Debugging method
 
 Worth recording, because the same path will serve the next problem.
 
@@ -506,12 +605,29 @@ where the problem actually was.
 - **`limo_base/scripts/` is not installed:** the package's `CMakeLists.txt`
   installs `launch` and `src`, but not `scripts`. It does not break the build and
   is not part of the Gazebo simulation.
-- **Nav2 and slam_toolbox are installed, not configured:** the packages are in
-  the image, but there is no navigation launch file or parameter file yet.
+- **`amcl.robot_model_type` is an approximation:** Nav2 has no dedicated
+  Ackermann motion model; `DifferentialMotionModel` is used instead (see
+  Part 4).
+- **`allow_reversing: false` on the controller:** reversing with simultaneous
+  steering was not validated against `RegulatedPurePursuitController`. No
+  current use of the robot needs it.
+- **No sample map is versioned:** `ws/maps/` is not part of the repository
+  (maps are specific to each world/run). Generate your own using section 6 of
+  `GUIA-BASIC.en.md` before using Nav2.
 
 # Suggested next steps
 
 1. ~~`slam_toolbox` to map the room~~ — done, the `limo_slam` package (Part 3).
-2. Save the map and bring up Nav2 with AMCL.
-3. Tune Nav2 for ackermann kinematics — the defaults assume differential drive,
-   and the LIMO cannot rotate in place.
+2. ~~Save the map and bring up Nav2 with AMCL~~ — done, the `limo_nav2`
+   package (Part 4).
+3. ~~Tune Nav2 for ackermann kinematics~~ — done:
+   `RegulatedPurePursuitController` with `min_turning_radius` derived from the
+   real `wheelbase`/`max_steer` (Part 4).
+4. Validate Nav2 against a carefully mapped room (a full pass around the
+   room in both directions, driven slowly) — the map used for the Part 4
+   validation was generated by a quick scripted spin, good enough to test the
+   package but not for real use (see "Found during testing" in Part 4).
+5. Consider Ackermann-compatible recovery behaviors — the default `Spin`
+   behavior in Nav2's behavior tree requests pure rotation, which the LIMO
+   cannot do; today it just burns its `time_allowance` without moving the
+   robot.
