@@ -1,7 +1,7 @@
 From 21328abaf08e92a9ea5da607195945622c735e05 Mon Sep 17 00:00:00 2001
 From: Pedro Harada <pedroyujiharada@gmail.com>
 Date: Fri, 11 Sep 2026 17:34:46 -0300
-Subject: [PATCH] Fix build and runtime failures on ROS 2 Humble + Gazebo
+Subject: [PATCH 1/2] Fix build and runtime failures on ROS 2 Humble + Gazebo
  Classic
 
 The package did not build, and once building, the simulation started with
@@ -337,6 +337,73 @@ index 0000000..dd5dbcb
 +
 +  </world>
 +</sdf>
+-- 
+2.43.0
+
+
+From b050c9e581b778e20a9662957476b9825af08f41 Mon Sep 17 00:00:00 2001
+From: Pedro Harada <pedroyujiharada@gmail.com>
+Date: Fri, 18 Sep 2026 12:42:32 -0300
+Subject: [PATCH 2/2] Make the Gazebo world selectable with world:=
+
+The world file was hardcoded to worlds/empty_world.model, so trying a
+different scene meant editing the launch file. It now takes a world:=
+argument, defaulting to the same file as before.
+
+PathJoinSubstitution joins with os.path.join, which drops the prefix when
+the second term is absolute, so both forms work with a single expression:
+a bare file name resolves inside limo_car/worlds/, and an absolute path is
+used as given. The latter is what lets other packages keep their own
+worlds instead of having to place them in this clone.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+---
+ limo_car/launch/ackermann_gazebo.launch.py | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/limo_car/launch/ackermann_gazebo.launch.py b/limo_car/launch/ackermann_gazebo.launch.py
+index 326c504..3055c15 100755
+--- a/limo_car/launch/ackermann_gazebo.launch.py
++++ b/limo_car/launch/ackermann_gazebo.launch.py
+@@ -13,7 +13,7 @@ from ament_index_python.packages import get_package_share_directory
+ from launch import LaunchDescription
+ from launch.actions import DeclareLaunchArgument
+ from launch.actions import IncludeLaunchDescription
+-from launch.substitutions import LaunchConfiguration
++from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+ from launch.launch_description_sources import PythonLaunchDescriptionSource
+ 
+ from launch_ros.actions import Node
+@@ -22,13 +22,19 @@ def generate_launch_description():
+ 
+     # definiert Path für Modell
+     package_name = 'limo_car'
+-    world_file_path = 'worlds/empty_world.model'
+     rviz_path = 'rviz/gazebo.rviz'
+ 
+     pkg_path = os.path.join(get_package_share_directory(package_name))
+-    world_path = os.path.join(pkg_path, world_file_path)
+     default_rviz_config_path = os.path.join(pkg_path, rviz_path)
+ 
++    # An absolute path in world:= replaces the package's worlds/ prefix,
++    # because PathJoinSubstitution joins with os.path.join.
++    world_arg = DeclareLaunchArgument(
++        name='world', default_value='empty_world.model',
++        description='World file inside limo_car/worlds/, or an absolute path')
++    world_path = PathJoinSubstitution(
++        [pkg_path, 'worlds', LaunchConfiguration('world')])
++
+     rviz_arg = DeclareLaunchArgument(name='rvizconfig', default_value=str(default_rviz_config_path),
+                                      description='Absolute path to rviz config file')
+     rviz_node = Node(
+@@ -70,6 +76,7 @@ def generate_launch_description():
+ 
+ 
+     return LaunchDescription([
++        world_arg,
+         mbot,
+         gazebo,
+         spawn_entity,
 -- 
 2.43.0
 

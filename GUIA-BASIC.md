@@ -88,6 +88,16 @@ configurado com o modelo do robô, o laser e a imagem da câmera.
 
 Deixe esse terminal ocupado com a simulação. `Ctrl+C` encerra tudo.
 
+Para carregar outro mundo, use `world:=`, com o nome de um arquivo dentro de
+`limo_car/worlds/` ou um caminho absoluto:
+
+```bash
+ros2 launch limo_car ackermann_gazebo.launch.py \
+  world:=$(ros2 pkg prefix limo_worlds)/share/limo_worlds/worlds/dynamic_world.model
+```
+
+Esse é o mundo com obstáculo móvel — ver a seção 8.
+
 ## 5. Dirigir o robô
 
 ### Opção A: sliders (mais fácil)
@@ -262,7 +272,74 @@ ros2 lifecycle get /amcl                   # deve responder "active"
 | Nunca sai do estado `active` esperado, ou os tópicos de `/amcl` não aparecem | a pose inicial fixa (0,0,0) não bate com a pose real do robô | relance a simulação do zero (`ros2 launch limo_car ackermann_gazebo.launch.py`) antes do Nav2, para o robô voltar à origem |
 | Objetivo aceito mas cancela logo depois | objetivo fora da área mapeada, ou dentro de um obstáculo inflado | escolha um ponto mais central no mapa, longe das paredes |
 
-## 8. Inspecionar o que está acontecendo
+## 8. Obstáculos móveis
+
+O pacote `limo_worlds` traz um mundo igual ao de sempre, mais uma caixa que
+atravessa a sala de um lado ao outro e volta, em loop. Serve para ver o Nav2
+reagir a algo que não está no mapa salvo.
+
+São duas peças: o mundo (carregado pelo Gazebo) e o nó que move a caixa. Sem o
+nó, a caixa fica parada onde nasceu.
+
+Compilar, uma vez só:
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_worlds
+source install/setup.bash
+```
+
+Terminal 1, a simulação com o mundo dinâmico:
+
+```bash
+ros2 launch limo_car ackermann_gazebo.launch.py \
+  world:=$(ros2 pkg prefix limo_worlds)/share/limo_worlds/worlds/dynamic_world.model
+```
+
+Terminal 2, o nó que anima os obstáculos:
+
+```bash
+ros2 launch limo_worlds dynamic_obstacles.launch.py
+```
+
+A caixa vermelha deve começar a percorrer o corredor `y = -2.5`. Para conferir
+que o lidar a enxerga, veja o `/scan` no RViz: os pontos acompanham a caixa.
+
+### Criar seus próprios cenários
+
+A trajetória está em `ws/src/limo_worlds/config/obstacles.yaml`, em waypoints
+interpolados linearmente:
+
+```yaml
+obstacles:
+  - name: crossing_box      # precisa existir como <model> no mundo carregado
+    z: 0.4                  # altura do centro do modelo
+    loop: true              # ao fim da trajetória, recomeça
+    waypoints:
+      - {time: 0.0, x: -4.0, y: -2.5, yaw: 0.0}
+      - {time: 10.0, x: 4.0, y: -2.5, yaw: 0.0}
+      - {time: 20.0, x: -4.0, y: -2.5, yaw: 0.0}
+```
+
+Para um obstáculo novo: copie o bloco `<model name="crossing_box">` em
+`worlds/dynamic_world.model`, dê outro nome, e acrescente uma entrada de mesmo
+nome no YAML. Use outro YAML sem recompilar com
+`ros2 launch limo_worlds dynamic_obstacles.launch.py obstacles_file:=/caminho/meu.yaml`.
+
+Duas regras do mundo, que valem para qualquer obstáculo móvel que você criar:
+
+- Use `<model>`, **nunca `<actor>`**. O Gazebo Classic não entrega as colisões
+  de ator aos sensores de raio: o obstáculo se move na tela e o lidar não o vê.
+- O link precisa de `<kinematic>true</kinematic>` e `<gravity>false</gravity>`,
+  senão a física briga com o nó pela pose do modelo.
+
+| Sintoma | Causa provável | O que fazer |
+|---|---|---|
+| O obstáculo não se move | o nó não subiu, ou o nome no YAML não bate com o `<model>` do mundo | confira o log do terminal 2 e os nomes |
+| `/gazebo/set_entity_state indisponível` | o mundo carregado não é o `dynamic_world.model` (só ele declara o plugin de estado) | confira o `world:=` do terminal 1 |
+| O robô atravessa o obstáculo | o obstáculo é um `<actor>`, ou o link não tem `<collision>` | use `<model>` com colisão, como acima |
+
+## 9. Inspecionar o que está acontecendo
 
 | Objetivo | Comando |
 |---|---|
@@ -287,7 +364,7 @@ Tópicos principais da simulação:
 | `/depth_camera/image_raw` | câmera de profundidade |
 | `/tf`, `/tf_static` | árvore de transformadas |
 
-## 9. Editar o cenário
+## 10. Editar o cenário
 
 O mundo fica em `ws/src/limo_ros2/limo_car/worlds/empty_world.model` e pode ser
 editado no host, com qualquer editor. Contém uma sala fechada de 10x10 m, dois
@@ -299,7 +376,7 @@ uma forma e clique no chão. Some ao fechar o Gazebo.
 Para que uma edição no arquivo valha, relance o launch — o mundo só é lido
 quando o `gzserver` sobe.
 
-## 10. Problemas comuns
+## 11. Problemas comuns
 
 | Sintoma | Causa provável | O que fazer |
 |---|---|---|
@@ -312,7 +389,7 @@ quando o `gzserver` sobe.
 | `groups: cannot find name for group ID 992` | grupo `render` sem nome dentro do container | cosmético, ignore |
 | Mensagens de erro do ALSA | container sem placa de som | cosmético, ignore |
 
-## 11. Onde ficam as coisas
+## 12. Onde ficam as coisas
 
 | No host | No container |
 |---|---|

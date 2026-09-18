@@ -88,6 +88,16 @@ and RViz preconfigured with the robot model, the laser and the camera image.
 
 Leave that terminal busy with the simulation. `Ctrl+C` shuts everything down.
 
+To load a different world, use `world:=`, with either the name of a file inside
+`limo_car/worlds/` or an absolute path:
+
+```bash
+ros2 launch limo_car ackermann_gazebo.launch.py \
+  world:=$(ros2 pkg prefix limo_worlds)/share/limo_worlds/worlds/dynamic_world.model
+```
+
+That is the world with a moving obstacle — see section 8.
+
 ## 5. Driving the robot
 
 ### Option A: sliders (easiest)
@@ -263,7 +273,75 @@ ros2 lifecycle get /amcl                   # should answer "active"
 | `/amcl` topics never show the expected `active` state | the fixed initial pose (0,0,0) does not match the robot's real pose | relaunch the simulation from scratch (`ros2 launch limo_car ackermann_gazebo.launch.py`) before Nav2, so the robot returns to the origin |
 | Goal accepted but cancels right after | goal outside the mapped area, or inside an inflated obstacle | pick a more central point on the map, away from the walls |
 
-## 8. Inspecting what is going on
+## 8. Moving obstacles
+
+The `limo_worlds` package ships the same room as always, plus a box that
+crosses it from side to side and back, in a loop. It is there to watch Nav2
+react to something that is not in the saved map.
+
+Two pieces: the world (loaded by Gazebo) and the node that moves the box.
+Without the node, the box just sits where it was spawned.
+
+Build it once:
+
+```bash
+cd ~/ws
+colcon build --symlink-install --packages-select limo_worlds
+source install/setup.bash
+```
+
+Terminal 1, the simulation with the dynamic world:
+
+```bash
+ros2 launch limo_car ackermann_gazebo.launch.py \
+  world:=$(ros2 pkg prefix limo_worlds)/share/limo_worlds/worlds/dynamic_world.model
+```
+
+Terminal 2, the node that animates the obstacles:
+
+```bash
+ros2 launch limo_worlds dynamic_obstacles.launch.py
+```
+
+The red box should start running along the `y = -2.5` corridor. To confirm the
+lidar sees it, watch `/scan` in RViz: the points track the box.
+
+### Building your own scenarios
+
+The trajectory lives in `ws/src/limo_worlds/config/obstacles.yaml`, as
+linearly interpolated waypoints:
+
+```yaml
+obstacles:
+  - name: crossing_box      # must exist as a <model> in the loaded world
+    z: 0.4                  # height of the model's center
+    loop: true              # restart when the trajectory ends
+    waypoints:
+      - {time: 0.0, x: -4.0, y: -2.5, yaw: 0.0}
+      - {time: 10.0, x: 4.0, y: -2.5, yaw: 0.0}
+      - {time: 20.0, x: -4.0, y: -2.5, yaw: 0.0}
+```
+
+For a new obstacle: copy the `<model name="crossing_box">` block in
+`worlds/dynamic_world.model`, give it another name, and add an entry of the
+same name to the YAML. Use a different YAML without rebuilding with
+`ros2 launch limo_worlds dynamic_obstacles.launch.py obstacles_file:=/path/mine.yaml`.
+
+Two rules about the world, valid for any moving obstacle you create:
+
+- Use `<model>`, **never `<actor>`**. Gazebo Classic does not hand actor
+  collisions to ray sensors: the obstacle moves on screen and the lidar does
+  not see it.
+- The link needs `<kinematic>true</kinematic>` and `<gravity>false</gravity>`,
+  otherwise physics fights the node over the model's pose.
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| The obstacle does not move | the node did not start, or the name in the YAML does not match the `<model>` in the world | check terminal 2's log and the names |
+| `/gazebo/set_entity_state unavailable` | the loaded world is not `dynamic_world.model` (only it declares the state plugin) | check `world:=` in terminal 1 |
+| The robot drives through the obstacle | the obstacle is an `<actor>`, or the link has no `<collision>` | use a `<model>` with collision, as above |
+
+## 9. Inspecting what is going on
 
 | Goal | Command |
 |---|---|
@@ -288,7 +366,7 @@ Main simulation topics:
 | `/depth_camera/image_raw` | depth camera |
 | `/tf`, `/tf_static` | transform tree |
 
-## 9. Editing the scene
+## 10. Editing the scene
 
 The world lives in `ws/src/limo_ros2/limo_car/worlds/empty_world.model` and can
 be edited on the host with any editor. It contains a closed 10x10 m room, two
@@ -300,7 +378,7 @@ a shape and click on the ground. They disappear when Gazebo closes.
 For a file edit to take effect, relaunch — the world is only read when
 `gzserver` starts.
 
-## 10. Common problems
+## 11. Common problems
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
@@ -313,7 +391,7 @@ For a file edit to take effect, relaunch — the world is only read when
 | `groups: cannot find name for group ID 992` | the `render` group has no name inside the container | cosmetic, ignore |
 | ALSA error messages | no sound card in the container | cosmetic, ignore |
 
-## 11. Where things live
+## 12. Where things live
 
 | On the host | In the container |
 |---|---|

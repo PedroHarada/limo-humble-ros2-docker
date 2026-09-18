@@ -3,6 +3,10 @@ ws/build/
 ws/install/
 ws/log/
 
+# python bytecode and test caches
+__pycache__/
+.pytest_cache/
+
 # limo_ros2 is a clone with its own git repository; the fixes applied to it
 # live in patches/limo_ros2-fixes.patch, which is versioned here
 ws/src/limo_ros2/

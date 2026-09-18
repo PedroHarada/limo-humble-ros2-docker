@@ -1,0 +1,151 @@
+<?xml version="1.0" ?>
+<!-- Mesma sala do empty_world.model do limo_car, mais obstáculos móveis.
+     Cada obstáculo móvel é um modelo kinematic (a física não o move) cuja pose
+     é escrita pelo nó obstacle_mover, via o plugin de estado abaixo. Modelos
+     comuns, e não <actor>, porque o Gazebo Classic não entrega colisões de
+     ator aos sensores de raio: o lidar simplesmente não os enxerga. -->
+<sdf version="1.6">
+  <world name="default">
+
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <scene>
+      <shadows>false</shadows>
+    </scene>
+
+    <!-- Expõe /gazebo/set_entity_state, por onde o obstacle_mover escreve as
+         poses dos obstáculos móveis. -->
+    <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
+      <ros>
+        <namespace>/gazebo</namespace>
+      </ros>
+      <update_rate>50.0</update_rate>
+    </plugin>
+
+    <!-- ****************** Paredes da sala (10 x 10 m) ****************** -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>10.2 0.2 1.0</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_east">
+      <static>true</static>
+      <pose>5 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-5 0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.2 10.2 1.0</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ****************** Obstaculos estaticos ****************** -->
+    <!-- assimétricos de propósito: dão features distintas para o scan matcher -->
+    <model name="pillar_a">
+      <static>true</static>
+      <pose>2.0 1.5 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.6 0.6 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.6 0.6 0.8</size></box></geometry>
+          <material><ambient>0.3 0.4 0.6 1</ambient><diffuse>0.4 0.5 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="pillar_b">
+      <static>true</static>
+      <pose>-2.5 -1.0 0.4 0 0 0.5</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>1.2 0.4 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>1.2 0.4 0.8</size></box></geometry>
+          <material><ambient>0.3 0.4 0.6 1</ambient><diffuse>0.4 0.5 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="cylinder_c">
+      <static>true</static>
+      <pose>-1.0 3.0 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.35</radius><length>0.8</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.35</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.5 0.35 0.25 1</ambient><diffuse>0.6 0.45 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ****************** Obstaculo movel ****************** -->
+    <!-- A pose inicial aqui só vale até o obstacle_mover assumir; a trajetória
+         está em config/obstacles.yaml, sob este mesmo nome de modelo. -->
+    <model name="crossing_box">
+      <pose>-4.0 -2.5 0.4 0 0 0</pose>
+      <link name="link">
+        <kinematic>true</kinematic>
+        <gravity>false</gravity>
+        <collision name="collision">
+          <geometry><box><size>0.4 0.4 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 0.4 0.8</size></box></geometry>
+          <material><ambient>0.7 0.3 0.2 1</ambient><diffuse>0.8 0.35 0.25 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

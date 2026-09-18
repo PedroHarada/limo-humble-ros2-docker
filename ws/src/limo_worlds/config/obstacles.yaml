@@ -1,0 +1,15 @@
+# Trajetórias dos obstáculos móveis de dynamic_world.model.
+#
+# Cada obstáculo precisa de um modelo de mesmo nome no mundo carregado. Os
+# waypoints são interpolados linearmente; time é em segundos desde que o nó
+# subiu, e z é a altura do centro do modelo (fixa ao longo da trajetória).
+obstacles:
+  # Atravessa a sala de oeste a leste e volta, em 20 s, pelo corredor y = -2.5,
+  # que é livre de obstáculos estáticos.
+  - name: crossing_box
+    z: 0.4
+    loop: true
+    waypoints:
+      - {time: 0.0, x: -4.0, y: -2.5, yaw: 0.0}
+      - {time: 10.0, x: 4.0, y: -2.5, yaw: 0.0}
+      - {time: 20.0, x: -4.0, y: -2.5, yaw: 0.0}

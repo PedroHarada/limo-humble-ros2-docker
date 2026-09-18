@@ -23,6 +23,10 @@ origin, `limo_nav2` localizes (AMCL), plans and executes a `NavigateToPose`
 to the destination using the `RegulatedPurePursuitController` — tested via
 `ros2 action send_goal`, with no manual intervention.
 
+`limo_worlds` adds moving obstacles to the room, to exercise replanning
+against what the map does not know about. Validated on the sensor side: the
+lidar does see the obstacle cross. Running Nav2 in that world is still pending.
+
 ```
 .
 ├── Dockerfile
@@ -36,9 +40,10 @@ to the destination using the `RegulatedPurePursuitController` — tested via
 │   └── limo_ros2-fixes.patch
 └── ws/
     └── src/
-        ├── limo_ros2/  # cloned by setup.sh, not versioned here
-        ├── limo_slam/  # slam_toolbox configuration (versioned here)
-        └── limo_nav2/  # Nav2 configuration (versioned here)
+        ├── limo_ros2/   # cloned by setup.sh, not versioned here
+        ├── limo_slam/   # slam_toolbox configuration (versioned here)
+        ├── limo_nav2/   # Nav2 configuration (versioned here)
+        └── limo_worlds/ # worlds with moving obstacles (versioned here)
 ```
 
 To set the environment up on a new machine: `./setup.sh`, then
@@ -485,7 +490,108 @@ the local costmap gets evaluated from a wrong `map → odom` transform. The fix
 is to always relaunch `ackermann_gazebo.launch.py` from scratch before Nav2 —
 documented in section 7 of `GUIA-BASIC.en.md`.
 
-# Part 5 — Portability
+# Part 5 — Moving obstacles (the `limo_worlds` package)
+
+The Nav2 setup validated in Part 4 navigates against a saved map, where
+everything that exists was already in the map. Exercising replanning needs an
+obstacle the map does not know about, moving while the robot navigates. That is
+what this package provides: a world with moving obstacles and a node to animate
+them.
+
+```
+ws/src/limo_worlds/
+├── config/obstacles.yaml               # trajectories, as waypoints
+├── launch/dynamic_obstacles.launch.py
+├── limo_worlds/obstacle_mover.py       # the node that writes the poses
+├── limo_worlds/trajectory.py           # interpolation (a pure function)
+├── test/test_trajectory.py
+└── worlds/dynamic_world.model
+```
+
+## Gazebo's `<actor>` is useless here: the lidar cannot see it
+
+The obvious route would be SDF's `<actor>`, which animates a model through
+waypoints with no code at all. It does not work for this purpose, and it fails
+in a particularly nasty way: the obstacle moves on screen and the robot drives
+straight through it, because ray sensors never receive the actor's collisions.
+
+Measured in this environment, with an actor and a plain model standing still
+2.5 m from the robot, on opposite sides, and the same lidar beam aimed at each:
+
+| Object at 2.5 m | What `/scan` measured |
+|---|---|
+| `<actor>` with `<collision>` declared | 4.88 – 4.93 m (the wall **behind** it) |
+| plain `<model>`, `kinematic` | 2.28 – 2.33 m |
+
+`ActorCollisionsPlugin`, which would attach those collisions, is a Gazebo
+example that does not ship compiled in the image
+(`/usr/lib/x86_64-linux-gnu/gazebo-11/plugins/` does not have it). Hence the
+architecture below.
+
+## A plain model, plus a node that writes its pose
+
+Each moving obstacle is a regular `<model>` with `<kinematic>true</kinematic>`
+and `<gravity>false</gravity>` — physics neither moves it nor lets it fall, but
+it has a real collision, which is what the lidar needs. What moves it is
+`obstacle_mover`, which at 30 Hz interpolates the pose from the waypoints and
+writes it through the `/gazebo/set_entity_state` service, exposed by the
+`libgazebo_ros_state.so` plugin declared in the world.
+
+Worth stating what this is *not*: the obstacle neither pushes nor is pushed,
+because it takes no part in the dynamics. To the lidar and to Nav2's costmap —
+which is what is being tested here — the difference does not show.
+
+Trajectories live in `config/obstacles.yaml`, outside the code and outside the
+SDF:
+
+```yaml
+obstacles:
+  - name: crossing_box      # must exist as a <model> in the world
+    z: 0.4
+    loop: true
+    waypoints:
+      - {time: 0.0, x: -4.0, y: -2.5, yaw: 0.0}
+      - {time: 10.0, x: 4.0, y: -2.5, yaw: 0.0}
+      - {time: 20.0, x: -4.0, y: -2.5, yaw: 0.0}
+```
+
+A new scenario is a `<model>` added to the world plus an entry of the same name
+in the YAML. The `y = -2.5` corridor in the sample world was picked because it
+is free of static obstacles and crosses any route between the origin and the
+southern quadrant of the room.
+
+`trajectory.py` isolates the interpolation as a pure function (`pose_at`),
+covered by `test/test_trajectory.py` — including `yaw` crossing ±π, where the
+interpolation takes the short way around.
+
+## The `world` argument in the `limo_car` launch
+
+`ackermann_gazebo.launch.py` had the world hardcoded. It now takes `world:=`,
+with the same default as before:
+
+```bash
+ros2 launch limo_car ackermann_gazebo.launch.py world:=dynamic_world.model   # in limo_car/worlds/
+ros2 launch limo_car ackermann_gazebo.launch.py world:=/absolute/path.model
+```
+
+Both forms work through a single line (`PathJoinSubstitution`) because the
+`os.path.join` it uses drops the prefix when the second term starts with `/`.
+That is what lets `limo_worlds` keep its worlds in its own package instead of
+having to place them inside the `limo_ros2` clone. This change is upstream, so
+it lives in `patches/limo_ros2-fixes.patch` (see Part 7).
+
+## Validation
+
+Headless simulation with the dynamic world, robot at the origin, and the lidar
+beam aimed at the obstacle's corridor, for 30 s: the measured distance swings
+between **2.29 m** (obstacle crossing the beam) and **4.93 m** (the far wall,
+obstacle away). The obstacle is visible to the sensor and moves along its
+trajectory.
+
+Not tested with Nav2 actually navigating — that is the next step, and it
+depends on the careful map from the next steps list.
+
+# Part 6 — Portability
 
 This environment was built on a specific machine (Pop!_OS, COSMIC on Wayland,
 integrated Intel GPU). Three things depend on the machine, and all of them go
@@ -526,7 +632,7 @@ using none of it.
 
 ---
 
-# Part 6 — Version control
+# Part 7 — Version control
 
 Two layers of git, on purpose:
 
@@ -564,7 +670,7 @@ git format-patch dcc5a86 --stdout > ../../../patches/limo_ros2-fixes.patch
 
 ---
 
-# Part 7 — Debugging method
+# Part 8 — Debugging method
 
 Worth recording, because the same path will serve the next problem.
 
@@ -614,6 +720,11 @@ where the problem actually was.
 - **No sample map is versioned:** `ws/maps/` is not part of the repository
   (maps are specific to each world/run). Generate your own using section 6 of
   `GUIA-BASIC.en.md` before using Nav2.
+- **Moving obstacles are outside the dynamics:** they are `kinematic`, moved by
+  pose writes (Part 5). They neither push the robot nor get pushed by it; a
+  contact becomes overlap, not collision. Enough for lidar and costmap.
+- **Nav2 has not been tested against the moving obstacles yet:** `limo_worlds`
+  is validated only on the sensor side (the lidar sees the obstacle cross).
 
 # Suggested next steps
 
@@ -631,3 +742,8 @@ where the problem actually was.
    behavior in Nav2's behavior tree requests pure rotation, which the LIMO
    cannot do; today it just burns its `time_allowance` without moving the
    robot.
+6. Navigate with Nav2 in `dynamic_world.model` and watch the replanning around
+   the moving obstacle (Part 5) — depends on the map from item 4, since AMCL
+   needs to localize against a map of the same room.
+7. Compare controllers (`RegulatedPurePursuit` vs `DWB` vs `TEB`) over the same
+   route with a moving obstacle, to see which one reacts better.
