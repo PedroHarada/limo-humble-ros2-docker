@@ -5,9 +5,9 @@ e Nav2 **especificamente como estão configurados neste repositório**. Para o
 "o que foi feito e por quê" de todo o ambiente, veja o [README.md](README.md);
 para operação do dia a dia, veja o [GUIA-BASIC.md](GUIA-BASIC.md).
 
-**Atualização:** o pacote `limo_nav2` já existe e está validado (ver
-README.md, Parte 4) — a seção 4 abaixo, que descrevia como o Nav2 "vai se
-encaixar", já reflete a implementação real, não mais uma projeção.
+**Atualização:** os pacotes `limo_nav2` (Nav2, README.md Parte 4) e
+`limo_worlds` (obstáculos móveis, Parte 5) já existem. As seções abaixo
+descrevem a implementação real, não uma projeção.
 
 ---
 
@@ -81,7 +81,7 @@ existe um simulador de física em vez de motores reais.
 
 O `gzserver` publica `/clock` (`rosgraph_msgs/Clock`) com o tempo simulado.
 Todo nó que precisa de timestamps coerentes com essa simulação — o
-`robot_state_publisher`, o `slam_toolbox`, e futuramente o Nav2 — recebe o
+`robot_state_publisher`, o `slam_toolbox`, o Nav2 e o `obstacle_mover` — recebe o
 parâmetro `use_sim_time: true` para consultar `/clock` em vez do relógio de
 parede do sistema. Sem essa coerência, TF e mensagens com timestamp
 "futuro" ou "passado" em relação ao simulador seriam descartados por
@@ -100,14 +100,14 @@ isso causou aqui):
   `base_footprint` (pose do robô no mundo) e os joints das rodas.
 
 `base_footprint → base_link` é o elo fixo que junta as duas. Sem ele, como
-documentado no README, RViz, SLAM e (no futuro) o Nav2 veem duas árvores TF
+documentado no README, RViz, SLAM e Nav2 veem duas árvores TF
 desconexas e nada funciona, mesmo com todos os tópicos publicando
 normalmente.
 
-## 3. SLAM: o elo que hoje faz o papel de "quase-Nav2"
+## 3. SLAM: o mesmo padrão de comunicação do Nav2
 
-O `limo_slam` (pacote próprio deste repositório, não do upstream) mostra o
-mesmo padrão de comunicação que o Nav2 vai usar: um nó ROS 2 comum,
+O `limo_slam` (pacote próprio deste repositório, não do upstream) segue o
+mesmo padrão de comunicação do Nav2: um nó ROS 2 comum,
 consumindo os mesmos tópicos que o Gazebo publica, sem qualquer acoplamento
 direto ao simulador.
 
@@ -123,9 +123,10 @@ O `slam_toolbox` (`async_slam_toolbox_node`) assina `/scan` e `/tf`, e publica:
 - o elo de TF `map → odom`, que fecha a árvore completa
   `map → odom → base_footprint → base_link → sensores`.
 
-Esse elo `map → odom` é exatamente o que o Nav2 vai precisar para localizar o
-robô dentro de um mapa — hoje é o `slam_toolbox` que o fornece; quando o Nav2
-entrar em cena com um mapa salvo, será o `amcl` a publicá-lo.
+Esse elo `map → odom` é exatamente o que o Nav2 precisa para localizar o robô
+dentro de um mapa. Durante o mapeamento é o `slam_toolbox` que o fornece;
+durante a navegação, contra um mapa salvo, é o `amcl`. Nunca os dois ao mesmo
+tempo — são fontes concorrentes da mesma transformada.
 
 ## 4. Nav2: como se encaixa (pacote `limo_nav2`)
 
@@ -136,8 +137,7 @@ faz hoje. É por isso que o Nav2 "simplesmente funciona" sobre uma simulação
 Gazebo — ele está a duas camadas de distância do simulador, falando somente
 com o grafo ROS 2.
 
-A arquitetura típica do Nav2, aplicada aos tópicos que **já existem** neste
-ambiente, seria:
+A arquitetura do Nav2, sobre os tópicos deste ambiente:
 
 ```
                          mapa salvo (sala.yaml/.pgm)
@@ -197,7 +197,57 @@ real do robô — exatamente o que o `limo_nav2` faz (README.md, Parte 4), com
 `min_turning_radius` calculado a partir do `wheelbase` e do `max_steer` reais
 do robô.
 
-## 5. Resumo do fluxo de mensagens (estado atual do repositório)
+## 5. Obstáculos móveis: a seta que aponta para dentro do simulador
+
+Tudo até aqui **lê** o Gazebo: os plugins publicam `/scan`, `/odom`, `/clock`, e
+os nós ROS 2 consomem. O `obstacle_mover` do `limo_worlds` é o único componente
+que faz o caminho inverso — ele **escreve** no simulador, alterando o mundo
+enquanto a simulação roda.
+
+O canal é um serviço, não um tópico:
+
+```
+obstacle_mover --/gazebo/set_entity_state (srv, 30 Hz)--> gzserver
+                                                             |
+                                        muda a pose do modelo crossing_box
+                                                             |
+                                                  o raycast do lidar bate nela
+                                                             |
+gzserver --/scan--> nav2_costmap_2d (local) --> controller_server --/cmd_vel-->
+```
+
+Quem expõe esse serviço é mais um plugin dentro do `gzserver`,
+`libgazebo_ros_state.so`, declarado no `dynamic_world.model`. Vale a mesma
+observação da seção 2: ele roda como parte do Gazebo, mas fala `rclcpp`, então
+para o grafo ROS 2 é um provedor de serviço como qualquer outro.
+
+**Serviço e não tópico** porque `set_entity_state` é uma operação pontual com
+confirmação — o nó pede uma pose específica e o Gazebo responde se conseguiu.
+Como cada chamada é um round-trip, o `obstacle_mover` dispara com `call_async` e
+descarta os futures, sem bloquear o timer de 30 Hz esperando resposta.
+
+### 5.1 Por que o obstáculo é `<model>` e não `<actor>`
+
+O `<actor>` do SDF animaria a caixa sem nenhum nó externo, o que tornaria esta
+seção inteira desnecessária. Ele não funciona aqui: o Gazebo Classic não entrega
+as colisões de ator aos sensores de raio, então a caixa se moveria na tela sem
+nunca aparecer no `/scan` — e, por consequência, sem nunca chegar ao costmap do
+Nav2. Os números medidos estão no README.md, Parte 5.
+
+A alternativa adotada — modelo comum com `<kinematic>true</kinematic>` — tem
+colisão real, que é o que o raycast do lidar precisa encontrar. O custo é que a
+pose passa a ser responsabilidade de alguém de fora, e esse alguém é o
+`obstacle_mover`.
+
+### 5.2 O que o Nav2 vê
+
+Nada de novo, e é esse o ponto. O obstáculo não aparece no `/map` do
+`map_server` (o mapa foi salvo antes, com a sala vazia); ele aparece no `/scan`,
+que alimenta o `obstacle_layer` do **costmap local**. É essa diferença entre o
+mapa estático e o que o sensor vê agora que faz o `controller_server` desviar —
+o mecanismo de replanejamento que o `limo_worlds` existe para exercitar.
+
+## 6. Resumo do fluxo de mensagens (estado atual do repositório)
 
 ```
               use_sim_time=true, /clock
@@ -206,7 +256,8 @@ do robô.
    |                                       |
    v                                       v
 gzserver (plugins Gazebo)  <----/cmd_vel---+---- rqt_robot_steering /
-   |   |   |                                     teleop_twist_keyboard
+   |   |   |         ^                           teleop_twist_keyboard
+   |   |   |         +--/gazebo/set_entity_state (srv)-- obstacle_mover
    |   |   +--/limo/imu------------------> (não consumido hoje)
    |   +--/depth_camera/*----------------> RViz
    +--/scan---------------+---------------> RViz
@@ -223,7 +274,14 @@ plugins, TF). Os dois não rodam ao mesmo tempo: o `slam_toolbox` é usado para
 gerar o mapa (`limo_slam`), e o Nav2 (`limo_nav2`) depois localiza contra esse
 mapa já salvo.
 
+O `obstacle_mover` (`limo_worlds`) é ortogonal aos dois: mexe no mundo, não no
+robô. Pode rodar durante o Nav2 (é o caso de uso) e, em princípio, durante o
+SLAM — mas aí o obstáculo móvel entraria no mapa como rastro, que é justamente
+o que não se quer num mapa estático.
+
 ---
 
 *Este documento descreve o comportamento observado e validado em todo o
-ambiente: Gazebo, SLAM (`limo_slam`) e Nav2 (`limo_nav2`, README.md Parte 4).*
+ambiente: Gazebo, SLAM (`limo_slam`), Nav2 (`limo_nav2`, README.md Parte 4) e
+obstáculos móveis (`limo_worlds`, Parte 5). A única combinação ainda não
+exercitada é o Nav2 navegando com os obstáculos em movimento.*
