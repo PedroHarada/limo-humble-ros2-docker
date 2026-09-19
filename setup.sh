@@ -4,6 +4,9 @@
 #   1. gera o .env com UID/GID do usuário e os GIDs de video e render
 #   2. garante que o arquivo de autoridade do X exista
 #   3. clona o limo_ros2 e aplica as correções de patches/
+#   4. clona o livox_ros_driver2 (mensagem CustomMsg do FAST_LIO)
+#   5. clona o ros2_livox_simulation (sensor Mid-360 no Gazebo)
+#   6. clona o mrs_gazebo_common_resources (grass_plane do mundo floresta)
 #
 # Idempotente: rodar de novo não estraga nada.
 
@@ -108,6 +111,60 @@ else
     fi
 fi
 
+# --------------------------------------------- 4. livox_ros_driver2
+say "Preparando o livox_ros_driver2"
+
+LIVOX_DRIVER_DIR="ws/src/livox_ros_driver2"
+
+if [ -d "${LIVOX_DRIVER_DIR}/.git" ]; then
+    echo "    ${LIVOX_DRIVER_DIR} já existe, nada a fazer"
+else
+    # O upstream não tem branch separada para Humble: o CMakeLists se adapta
+    # pelo argumento DISTRO_ROS=humble, fixado nos defaults do colcon (Dockerfile).
+    git clone -q --depth 1 \
+        https://github.com/Livox-SDK/livox_ros_driver2.git "${LIVOX_DRIVER_DIR}"
+    echo "    clonado em ${LIVOX_DRIVER_DIR}"
+fi
+
+# O repositório guarda package.xml e launch/ do ROS 2 com sufixo _ROS2; o
+# colcon só enxerga o pacote depois de copiá-los para os nomes canônicos.
+cp -f "${LIVOX_DRIVER_DIR}/package_ROS2.xml" "${LIVOX_DRIVER_DIR}/package.xml"
+rm -rf "${LIVOX_DRIVER_DIR}/launch"
+cp -r "${LIVOX_DRIVER_DIR}/launch_ROS2" "${LIVOX_DRIVER_DIR}/launch"
+echo "    package.xml e launch/ do ROS 2 preparados"
+
+# ------------------------------------------ 5. ros2_livox_simulation
+say "Preparando o ros2_livox_simulation (sensor Livox Mid-360 no Gazebo)"
+
+LIVOX_SIM_DIR="ws/src/ros2_livox_simulation"
+
+if [ -d "${LIVOX_SIM_DIR}/.git" ]; then
+    echo "    ${LIVOX_SIM_DIR} já existe, nada a fazer"
+else
+    git clone -q --depth 1 \
+        https://github.com/stm32f303ret6/livox_laser_simulation_RO2.git \
+        "${LIVOX_SIM_DIR}"
+    echo "    clonado em ${LIVOX_SIM_DIR}"
+fi
+
+# --------------------------------- 6. mrs_gazebo_common_resources
+say "Preparando o mrs_gazebo_common_resources (grass_plane do mundo floresta)"
+
+MRS_DIR="ws/src/mrs_gazebo_common_resources"
+
+if [ -d "${MRS_DIR}/.git" ]; then
+    echo "    ${MRS_DIR} já existe, nada a fazer"
+else
+    git clone -q --depth 1 --branch master \
+        https://github.com/ctu-mrs/mrs_gazebo_common_resources.git "${MRS_DIR}"
+    echo "    clonado em ${MRS_DIR}"
+fi
+
+# É um pacote ROS 1 (catkin) e só os modelos interessam aqui. O COLCON_IGNORE
+# evita que o colcon tente compilá-lo e derrube o build do workspace.
+touch "${MRS_DIR}/COLCON_IGNORE"
+echo "    COLCON_IGNORE criado (o colcon não compila este pacote)"
+
 say "Pronto"
 cat <<'EOF'
     Próximos passos:
@@ -124,5 +181,10 @@ cat <<'EOF'
       colcon build --symlink-install
       source install/setup.bash
 
-    Detalhes em GUIA-BASIC.md
+    O FAST_LIO não é clonado por este script. Quando o pacote do colega
+    chegar, coloque-o em ws/src/FAST_LIO e rode:
+
+      colcon build --packages-select fast_lio
+
+    Detalhes em GUIA-BASIC.md e README.md
 EOF

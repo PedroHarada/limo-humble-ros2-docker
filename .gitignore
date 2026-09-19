@@ -11,8 +11,17 @@ __pycache__/
 # live in patches/limo_ros2-fixes.patch, which is versioned here
 ws/src/limo_ros2/
 
+# clones externos preparados pelo setup.sh (cada um tem git proprio)
+ws/src/livox_ros_driver2/
+ws/src/ros2_livox_simulation/
+ws/src/mrs_gazebo_common_resources/
+
 # gerado pelo setup.sh, com os IDs desta maquina
 .env
 
 # documento didatico local, nao versionado
 DOCKER.md
+
+# zip original do mundo floresta; o conteudo ja foi movido para
+# ws/src/limo_worlds/{worlds,models}/, entao o zip fica so como fonte local
+FOREST_WORLDS.zip

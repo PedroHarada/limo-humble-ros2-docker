@@ -1,0 +1,27 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <model name="benchmark_new_tree_1">
+    <static>true</static>
+    <link name="link">
+      <!-- Physical trunk used by LiDAR; DAP=0.230 m. -->
+      <collision name="collision_trunk">
+        <pose>0 0 1.600000 0 0 0</pose>
+        <geometry><cylinder><radius>0.115000</radius><length>3.200000</length></cylinder></geometry>
+      </collision>
+      <!-- Crown collision stays above the 2 m lawnmower flight plane. -->
+      <collision name="collision_crown">
+        <pose>0 0 4.200000 0 0 0</pose>
+        <geometry><sphere><radius>1.800000</radius></sphere></geometry>
+      </collision>
+      <visual name="source_mesh_visual">
+        <pose>0.123000 0.234000 0.000000 0.000000000 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://new_tree_1/meshes/new_tree_1.obj</uri>
+            <scale>0.500000 0.500000 0.550000</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

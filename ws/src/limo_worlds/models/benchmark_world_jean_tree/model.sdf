@@ -1,0 +1,27 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <model name="benchmark_world_jean_tree">
+    <static>true</static>
+    <link name="link">
+      <!-- Physical trunk used by LiDAR; DAP=0.210 m. -->
+      <collision name="collision_trunk">
+        <pose>0 0 1.500000 0 0 0</pose>
+        <geometry><cylinder><radius>0.105000</radius><length>3.000000</length></cylinder></geometry>
+      </collision>
+      <!-- Crown collision stays above the 2 m lawnmower flight plane. -->
+      <collision name="collision_crown">
+        <pose>0 0 4.400000 0 0 0</pose>
+        <geometry><sphere><radius>1.900000</radius></sphere></geometry>
+      </collision>
+      <visual name="source_mesh_visual">
+        <pose>-0.642000 -0.739000 -0.005000 0.000000000 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://world_jean_tree/meshes/world_jean_tree.obj</uri>
+            <scale>0.700000 0.700000 1.000000</scale>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

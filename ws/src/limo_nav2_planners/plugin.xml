@@ -1,0 +1,8 @@
+<library path="limo_nav2_planners">
+  <class name="limo_nav2_planners/AStarPlanner" type="limo_nav2_planners::AStarPlanner" base_class_type="nav2_core::GlobalPlanner">
+    <description>Planner global A* (esqueleto) para o LIMO</description>
+  </class>
+  <class name="limo_nav2_planners/RRTPlanner" type="limo_nav2_planners::RRTPlanner" base_class_type="nav2_core::GlobalPlanner">
+    <description>Planner global RRT (esqueleto) para o LIMO</description>
+  </class>
+</library>

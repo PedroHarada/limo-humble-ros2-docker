@@ -3,7 +3,7 @@
 <package format="3">
   <name>limo_worlds</name>
   <version>1.0.0</version>
-  <description>Mundos do Gazebo com obstáculos móveis, para testar replanejamento do Nav2</description>
+  <description>Mundos do Gazebo com obstáculos móveis e floresta, para testar replanejamento do Nav2</description>
   <maintainer email="pedroyujiharada@gmail.com">Pedro Harada</maintainer>
   <license>Apache-2.0</license>
 
@@ -12,6 +12,8 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <!-- forest_world.launch.py reaproveita o launch do limo_car -->
+  <exec_depend>limo_car</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

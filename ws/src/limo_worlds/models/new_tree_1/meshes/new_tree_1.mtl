@@ -1,0 +1,22 @@
+# Blender 5.1.2 MTL File: 'new_tree_1.blend'
+# www.blender.org
+
+newmtl bark01
+Ka 0.200000 0.150000 0.100000
+Kd 1.000000 1.000000 1.000000
+Ks 0.050000 0.050000 0.050000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 1
+map_Kd bark01.jpg
+
+newmtl leaf_maple
+Ka 0.050000 0.120000 0.030000
+Kd 0.180000 0.420000 0.090000
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.450000
+d 1.000000
+illum 1
+map_d alpha maple.jpg

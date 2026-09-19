@@ -1,7 +1,7 @@
 From 21328abaf08e92a9ea5da607195945622c735e05 Mon Sep 17 00:00:00 2001
 From: Pedro Harada <pedroyujiharada@gmail.com>
 Date: Fri, 11 Sep 2026 17:34:46 -0300
-Subject: [PATCH 1/2] Fix build and runtime failures on ROS 2 Humble + Gazebo
+Subject: [PATCH 1/4] Fix build and runtime failures on ROS 2 Humble + Gazebo
  Classic
 
 The package did not build, and once building, the simulation started with
@@ -344,7 +344,7 @@ index 0000000..dd5dbcb
 From b050c9e581b778e20a9662957476b9825af08f41 Mon Sep 17 00:00:00 2001
 From: Pedro Harada <pedroyujiharada@gmail.com>
 Date: Fri, 18 Sep 2026 12:42:32 -0300
-Subject: [PATCH 2/2] Make the Gazebo world selectable with world:=
+Subject: [PATCH 2/4] Make the Gazebo world selectable with world:=
 
 The world file was hardcoded to worlds/empty_world.model, so trying a
 different scene meant editing the launch file. It now takes a world:=
@@ -404,6 +404,266 @@ index 326c504..3055c15 100755
          mbot,
          gazebo,
          spawn_entity,
+-- 
+2.43.0
+
+
+From 1067b1475522771ae19364445982fed516e12545 Mon Sep 17 00:00:00 2001
+From: Pedro Harada <pedroyujiharada@gmail.com>
+Date: Fri, 18 Sep 2026 19:31:38 -0300
+Subject: [PATCH 3/4] Add a simulated Livox Mid-360 for FAST_LIO
+
+The LIMO only had a 2D LaserScan, which is what the Nav2 costmaps use
+but is not enough for FAST_LIO, which consumes a 3D point cloud. Add the
+ros2_livox_simulation Gazebo Classic plugin (Mid-360 scan pattern) to the
+ackermann model, mounted on top of the chassis and publishing CustomMsg
+on /livox/lidar (and PointCloud2 on /livox/lidar_PointCloud2).
+
+The sensor is declared in sensor.xacro rather than by including the
+package mid360.xacro, for two reasons: always_on is required for the
+topic to publish in a headless server (without it Gazebo only updates
+the sensor when there is a transport subscriber), and naming the link
+after the sensor keeps the message frame_id ("livox") aligned with TF.
+
+The 2D laser is left untouched: Nav2 keeps using /scan for obstacles and
+FAST_LIO only supplies the world frame and odometry.
+
+The plugin is a clone from setup.sh, so it is declared as an exec
+dependency instead of being vendored here.
+---
+ limo_car/gazebo/ackermann_with_sensor.xacro | 15 ++++
+ limo_car/gazebo/sensor.xacro                | 76 +++++++++++++++++++++
+ limo_car/package.xml                        |  4 ++
+ 3 files changed, 95 insertions(+)
+
+diff --git a/limo_car/gazebo/ackermann_with_sensor.xacro b/limo_car/gazebo/ackermann_with_sensor.xacro
+index 4173148..c3adb02 100644
+--- a/limo_car/gazebo/ackermann_with_sensor.xacro
++++ b/limo_car/gazebo/ackermann_with_sensor.xacro
+@@ -24,6 +24,21 @@ andere Sensoren zusammengebaut werden und laden sie das Modell in Gazebo.-->
+         <parent link="base_link"/>
+         <child link="laser_link"/>
+     </joint>
++
++    <!-- ******************* Livox Mid-360 (3D) *********************** -->
++    <!-- Nuvem 3D para o FAST_LIO. O laser 2D acima continua sendo a fonte
++         de obstáculos dos costmaps do Nav2; este sensor só acrescenta a
++         geometria 3D que o FAST_LIO consome (CustomMsg em /livox/lidar).
++         O macro vive em sensor.xacro; o plugin e o CSV do padrão de
++         varredura vêm do ros2_livox_simulation (clonado pelo setup.sh). -->
++    <xacro:gazebo_livox frame_prefix="livox" />
++
++    <joint name="livox_joint" type="fixed">
++        <origin xyz="0 0 0.06" rpy="0 0 0"/>
++        <parent link="base_link"/>
++        <child link="livox"/>
++    </joint>
++
+     <!-- ************************* Depth-camera *********************** -->
+     <xacro:gazebo_depth_camera frame_prefix="depth_camera" />
+ 
+diff --git a/limo_car/gazebo/sensor.xacro b/limo_car/gazebo/sensor.xacro
+index 32ddfa0..664992b 100644
+--- a/limo_car/gazebo/sensor.xacro
++++ b/limo_car/gazebo/sensor.xacro
+@@ -81,6 +81,82 @@ realisierbar elektrische Komponente, also Sensoren aus Gazebo-Package. Diese Ant
+         </gazebo>
+     </xacro:macro>
+ 
++    <!-- ******************** Makrofunktion für Livox Mid-360 ******************** -->
++    <!-- Nuvem 3D (livox_ros_driver2/CustomMsg + sensor_msgs/PointCloud2) para o
++         FAST_LIO. O plugin (libros2_livox.so) e o CSV do padrao de varredura
++         vem do pacote ros2_livox_simulation, clonado pelo setup.sh.
++         O sensor e declarado aqui, e nao via mid360.xacro do pacote externo,
++         por dois motivos:
++           1. always_on: sem ele o Gazebo so atualiza o sensor quando existe
++              assinante de transporte, e headless o topico nunca publica;
++           2. o nome do link e igual ao nome do sensor, para o frame_id das
++              mensagens ("livox") bater com o frame da TF. -->
++    <xacro:macro name="gazebo_livox" params="frame_prefix">
++        <link name='${frame_prefix}'>
++            <inertial>
++                <mass value="0.4"/>
++                <origin xyz="0 0 0" rpy="0 0 0"/>
++                <inertia ixx="1e-4" ixy="0" ixz="0"
++                         iyy="1e-4" iyz="0"
++                         izz="1e-4"/>
++            </inertial>
++            <visual name='livox_visual'>
++                <origin xyz="0 0 0" rpy="0 0 0"/>
++                <geometry>
++                    <box size="0.1 0.06 0.06"/>
++                </geometry>
++            </visual>
++            <collision name='livox_collision'>
++                <origin xyz="0 0 0" rpy="0 0 0"/>
++                <geometry>
++                    <box size="0.1 0.06 0.06"/>
++                </geometry>
++            </collision>
++        </link>
++
++        <gazebo reference="${frame_prefix}">
++            <sensor type="ray" name="${frame_prefix}">
++                <pose>0 0 0 0 0 0</pose>
++                <always_on>true</always_on>
++                <visualize>true</visualize>
++                <update_rate>10</update_rate>
++                <plugin name="${frame_prefix}_plugin" filename="libros2_livox.so">
++                    <ray>
++                        <scan>
++                            <horizontal>
++                                <samples>100</samples>
++                                <resolution>1</resolution>
++                                <min_angle>0</min_angle>
++                                <max_angle>6.28318</max_angle>
++                            </horizontal>
++                            <vertical>
++                                <samples>360</samples>
++                                <resolution>1</resolution>
++                                <min_angle>-0.126</min_angle>
++                                <max_angle>0.964</max_angle>
++                            </vertical>
++                        </scan>
++                        <range>
++                            <min>0.1</min>
++                            <max>200.0</max>
++                            <resolution>0.002</resolution>
++                        </range>
++                        <noise>
++                            <type>gaussian</type>
++                            <mean>0.0</mean>
++                            <stddev>0.01</stddev>
++                        </noise>
++                    </ray>
++                    <visualize>false</visualize>
++                    <samples>40000</samples>
++                    <downsample>1</downsample>
++                    <csv_file_name>$(find ros2_livox_simulation)/scan_mode/mid360.csv</csv_file_name>
++                    <topic>livox/lidar</topic>
++                </plugin>
++            </sensor>
++        </gazebo>
++    </xacro:macro>
++
+     <!-- ******************************* Makrofunktion für Depth-Camera ***************************** -->
+     <xacro:macro name="gazebo_depth_camera" params="frame_prefix">
+         <link name='${frame_prefix}_link'>
+diff --git a/limo_car/package.xml b/limo_car/package.xml
+index e385bf7..99cdf52 100644
+--- a/limo_car/package.xml
++++ b/limo_car/package.xml
+@@ -21,6 +21,10 @@
+   <depend>gazebo</depend>
+   <depend>gazebo_ros</depend>
+   <depend>rqt_robot_steering</depend>
++  <!-- sensor 3D Livox Mid-360 (plugin Gazebo Classic do ros2_livox_simulation);
++       o xacro inclui o mid360.xacro deste pacote em tempo de launch -->
++  <exec_depend>ros2_livox_simulation</exec_depend>
++  <exec_depend>livox_ros_driver2</exec_depend>
+   
+   <export>
+     <build_type>ament_cmake</build_type>
+-- 
+2.43.0
+
+
+From 0f49cd10637539f14c74788cb62abc95e86125a8 Mon Sep 17 00:00:00 2001
+From: Pedro Harada <pedroyujiharada@gmail.com>
+Date: Fri, 18 Sep 2026 21:50:41 -0300
+Subject: [PATCH 4/4] Fix the LIMO model rendering in RViz and Gazebo
+
+Three defects kept the ackermann model from showing up correctly:
+
+- The mesh filenames were "$(find limo_car)/meshes/..." without the
+  file:// scheme, unlike limo_description. RViz failed to load both
+  limo_base.dae and limo_wheel.dae with "Unable to open file", so the
+  RobotModel display came up empty (the model looked incomplete). Add
+  the scheme, which both RViz and Gazebo understand.
+- The ackermann model declared the ROS 1 plugin libgazebo_ros_control.so,
+  which does not exist on Humble; Gazebo logged "Failed to load plugin"
+  on every spawn. The ackermann_drive plugin already handles control.
+- The base_link carried a <color rgba="0 0 0 0.5"/> override that could
+  render the chassis translucent. Removed so the mesh uses its own
+  limo_base.dae materials.
+---
+ limo_car/gazebo/ackermann.xacro | 21 ++++++++++++---------
+ 1 file changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/limo_car/gazebo/ackermann.xacro b/limo_car/gazebo/ackermann.xacro
+index e68f3c2..2f668ec 100644
+--- a/limo_car/gazebo/ackermann.xacro
++++ b/limo_car/gazebo/ackermann.xacro
+@@ -106,7 +106,7 @@ Es würde einfach in andere Datei angerufen werden. -->
+             <visual>
+                 <origin xyz="0 0 0" rpy="0 0 0" />
+                 <geometry>
+-                    <mesh filename="$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
++                    <mesh filename="file://$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
+                 </geometry>
+             </visual>
+             <collision>
+@@ -184,7 +184,7 @@ Es würde einfach in andere Datei angerufen werden. -->
+             <visual>
+                 <origin xyz="0 0 0" rpy="0 0 0" />
+                 <geometry>
+-                    <mesh filename="$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2" />
++                    <mesh filename="file://$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2" />
+                 </geometry>
+             </visual>
+             <collision>
+@@ -242,7 +242,7 @@ Es würde einfach in andere Datei angerufen werden. -->
+                 <origin xyz="0 0 -0.15" rpy="0 0 ${M_PI/2}" />
+                 <geometry>
+                     <!-- Modell von Hersteller, aber es ist kleiner als realen Produkt, da die Skale vergrößert wird -->
+-                    <mesh filename="$(find limo_car)/meshes/limo_base.dae" scale="1.2 1.2 1.2" />
++                    <mesh filename="file://$(find limo_car)/meshes/limo_base.dae" scale="1.2 1.2 1.2" />
+                 </geometry>
+             </visual>
+             <!-- Modell für physikalische Kollision zu modellieren. -->
+@@ -256,9 +256,10 @@ Es würde einfach in andere Datei angerufen werden. -->
+         </link>
+ 
+         <gazebo reference="base_link">
+-            <material>
+-                <color rgba="0 0 0 0.5"/>
+-            </material>
++            <!-- Sem override de material: a carcaça usa os materiais do proprio
++                 limo_base.dae. O <color rgba="0 0 0 0.5"/> que havia aqui
++                 deixava o corpo 50% transparente, e dava a impressao de modelo
++                 furado/incompleto. -->
+         </gazebo>
+ 
+         <!-- hinten Räder -->
+@@ -266,7 +267,7 @@ Es würde einfach in andere Datei angerufen werden. -->
+             <visual>
+                 <origin xyz="0 0 0" rpy="0 0 0" />
+                 <geometry>
+-                    <mesh filename="$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
++                    <mesh filename="file://$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
+                 </geometry>
+             </visual>
+             <collision>
+@@ -300,7 +301,7 @@ Es würde einfach in andere Datei angerufen werden. -->
+             <visual>
+                 <origin xyz="0 0 0" rpy="0 0 0" />
+                 <geometry>
+-                    <mesh filename="$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
++                    <mesh filename="file://$(find limo_car)/meshes/limo_wheel.dae" scale="1.2 1.2 1.2"/>
+                 </geometry>
+             </visual>
+             <collision>
+@@ -342,7 +343,9 @@ Es würde einfach in andere Datei angerufen werden. -->
+         <!-- ********************************** Kontrolle zu erstellen ************************************* -->
+         <!-- *********************************************************************************************** -->
+         <gazebo>
+-            <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so" />
++            <!-- libgazebo_ros_control.so nao existe no ROS 2 (era o plugin de
++                 ROS 1); o Gazebo logava "Failed to load plugin". Quem controla
++                 o robo aqui e o ackermann_drive abaixo. -->
+             <plugin name="ackermann_controller" filename="libgazebo_ros_ackermann_drive.so">
+                 <update_rate>100</update_rate>
+                 <front_left_joint>front_left_wheel_joint</front_left_joint>
 -- 
 2.43.0
 

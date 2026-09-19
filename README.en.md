@@ -27,11 +27,17 @@ to the destination using the `RegulatedPurePursuitController` — tested via
 against what the map does not know about. Validated on the sensor side: the
 lidar does see the obstacle cross. Running Nav2 in that world is still pending.
 
+The infrastructure for the **FAST_LIO -> Nav2** flow in the **forest world** is
+also ready (Part 9): a simulated Livox Mid-360 3D sensor, the FAST_LIO build
+dependencies in Docker, Nav2 without AMCL, the A*/RRT planner skeleton, and the
+forest world integrated into `limo_worlds`. The algorithms themselves (FAST_LIO
+and the planners) are not implemented — what is left is listed in Part 9.
+
 ```
 .
 ├── Dockerfile
 ├── docker-compose.yml
-├── setup.sh            # prepares .env, X11 and the patched limo_ros2 clone
+├── setup.sh            # prepares .env, X11 and the clones (limo_ros2 + Livox + mrs)
 ├── GUIA-BASIC.md       # how to use it (PT)
 ├── GUIA-BASIC.en.md    # how to use it (EN)
 ├── README.md           # decisions and fixes (PT)
@@ -40,10 +46,14 @@ lidar does see the obstacle cross. Running Nav2 in that world is still pending.
 │   └── limo_ros2-fixes.patch
 └── ws/
     └── src/
-        ├── limo_ros2/   # cloned by setup.sh, not versioned here
-        ├── limo_slam/   # slam_toolbox configuration (versioned here)
-        ├── limo_nav2/   # Nav2 configuration (versioned here)
-        └── limo_worlds/ # worlds with moving obstacles (versioned here)
+        ├── limo_ros2/                  # cloned by setup.sh, not versioned
+        ├── limo_slam/                  # slam_toolbox configuration
+        ├── limo_nav2/                  # Nav2 configuration
+        ├── limo_nav2_planners/         # A*/RRT planner skeleton
+        ├── limo_worlds/                # worlds: moving obstacles and forest
+        ├── livox_ros_driver2/          # cloned by setup.sh (CustomMsg)
+        ├── ros2_livox_simulation/      # cloned by setup.sh (Mid-360)
+        └── mrs_gazebo_common_resources/ # cloned by setup.sh (models)
 ```
 
 To set the environment up on a new machine: `./setup.sh`, then
@@ -330,6 +340,30 @@ Fixed with an explicit exception:
 
 Without it, the same disappearance would repeat in the patch generated from this
 clone.
+
+## 9. 3D model — RViz could not load the meshes
+
+**Symptom:** in RViz the `RobotModel` display drew nothing; the log repeated
+`Could not load resource [.../limo_base.dae]: Unable to open file`.
+
+**Cause:** in `limo_car` the meshes were declared as
+`$(find limo_car)/meshes/limo_base.dae`, without the `file://` scheme (the
+`limo_description` package in the same repository uses `file://$(find ...)`).
+RViz's `resource_retriever` could not open those paths, so the body and wheels
+had no geometry — the model looked incomplete.
+
+**Fix:** added `file://` to the five meshes in `ackermann.xacro`. Gazebo
+understands both forms, so the simulation is unchanged.
+
+Two minor fixes in the same file:
+
+| Change | Why |
+|---|---|
+| Removed `<plugin ... filename="libgazebo_ros_control.so"/>` | it is a ROS 1 plugin; on Humble Gazebo logged `Failed to load plugin` on every spawn. Control is handled by `libgazebo_ros_ackermann_drive.so` |
+| Removed the `base_link` `<color rgba="0 0 0 0.5"/>` override | it could render the chassis translucent; without it the body uses the `limo_base.dae` materials |
+
+Validated: RViz loads the `RobotModel` with no errors (`Global Status: Ok`) and
+Gazebo renders the LIMO with its wheels and body.
 
 ---
 
@@ -700,6 +734,134 @@ where the problem actually was.
 
 ---
 
+# Part 9 — Preparing for FAST_LIO + Nav2 (RRT/A*) in the forest world
+
+This part is **infrastructure**, not algorithms: it gets Docker and the
+workspace ready to receive FAST_LIO (from a colleague), the RRT/A* planners
+(written by the user) and the forest world. No planner or FAST_LIO logic is
+implemented here — the missing pieces are flagged throughout.
+
+## 1. 3D sensor — simulated Livox Mid-360
+
+The LIMO laser is 2D (`sensor_msgs/LaserScan`), which is enough for the Nav2
+costmaps but not for FAST_LIO, which consumes a 3D point cloud. A simulated
+Livox Mid-360 was added to the ackermann model:
+
+- `ros2_livox_simulation` package (ROS 2 port of `livox_laser_simulation`, with
+  the Mid-360 non-repetitive scan pattern), cloned by `setup.sh` into
+  `ws/src/ros2_livox_simulation`;
+- a `gazebo_livox` macro in `limo_car/gazebo/sensor.xacro` (in the `limo_ros2`
+  patch), instantiated in `ackermann_with_sensor.xacro` and mounted on top of
+  the chassis (0, 0, 0.06 m in `base_link`);
+- publishes `livox_ros_driver2/msg/CustomMsg` on `/livox/lidar` and
+  `sensor_msgs/msg/PointCloud2` on `/livox/lidar_PointCloud2`;
+- the 2D laser (`/scan`) is left untouched: Nav2 keeps using it in the costmaps.
+
+The sensor is declared in `sensor.xacro` instead of including the external
+`mid360.xacro` for two reasons: (1) `always_on` — without it Gazebo only
+updates the sensor when there is a transport subscriber, and headless the topic
+never publishes; (2) naming the link after the sensor keeps the message
+`frame_id` ("livox") aligned with TF.
+
+Validated headless: `/livox/lidar` publishes `CustomMsg` with
+`point_num: 40000` and `frame_id: livox`, `/scan` keeps publishing, and
+`base_link -> livox` shows up in TF. One caveat: the Mid-360 pattern uses 800k
+rays, and in the forest world the Real Time Factor drops to ~2 Hz even before
+FAST_LIO. If it gets too slow, reduce `<samples>` in the `gazebo_livox` macro.
+
+## 2. FAST_LIO build dependencies in Docker
+
+The `Dockerfile` now installs `libpcl-dev`, `libeigen3-dev`,
+`libgoogle-glog-dev`, `libfmt-dev` and `libapr1-dev`, and builds from source:
+
+- `Livox-SDK2` — required by `livox_ros_driver2` (which generates the
+  `CustomMsg` message consumed by FAST_LIO and by `ros2_livox_simulation`);
+- `Sophus` 1.22.10 — FAST_LIO depends on it and there is no apt package on
+  Humble.
+
+`livox_ros_driver2` is cloned by `setup.sh`; since upstream keeps the ROS 2
+`package.xml`/`launch` with a `_ROS2` suffix, the script copies them to the
+canonical names. Its `CMakeLists` picks the typesupport API from the
+`DISTRO_ROS=humble` argument, pinned in the colcon defaults inside the image.
+
+**FAST_LIO itself is not cloned** (the colleague's repository is not available
+yet). When the package arrives, the manual step is:
+
+```bash
+# put FAST_LIO in ws/src/FAST_LIO
+colcon build --packages-select fast_lio
+```
+
+## 3. Nav2 without AMCL — consuming FAST_LIO's output
+
+`limo_nav2/launch/nav2.launch.py` gained the
+`localization_source:=amcl|fast_lio` argument, defaulting to `amcl` (which
+preserves the old flow, the regression check):
+
+- `amcl`: unchanged behavior (map_server + AMCL + `bringup_launch`);
+- `fast_lio`: does not start AMCL. Starts `map_server` (the global costmap
+  `static_layer` needs the `/map` topic) with a `lifecycle_manager` for it
+  alone, plus Nav2's `navigation_launch`. The `map -> odom -> base_footprint`
+  chain must come from FAST_LIO.
+
+**Pending validation once FAST_LIO arrives** (left as documentation, not
+hardcoded, because the exact topics/frames only become clear with the code):
+FAST_LIO typically publishes odometry on `/Odometry` and TF
+`camera_init -> body`, while Nav2 expects the frames `map`, `odom` and
+`base_footprint` and the topic `/odom`. It will need remapping/renaming:
+
+- `camera_init -> map` and `body -> base_footprint` (or `body -> base_link`),
+  via a FAST_LIO parameter or a static transform;
+- `bt_navigator.odom_topic` and `velocity_smoother.odom_topic` to `/Odometry`
+  (they currently point to `/odom`).
+
+The costmaps keep using `/scan` for obstacles: FAST_LIO only supplies the
+localization/frame, it does not replace the 2D costmap.
+
+## 4. Nav2 planner skeleton (A* and RRT)
+
+New C++ package `ws/src/limo_nav2_planners`, with `AStarPlanner` and `RRTPlanner`
+implementing `nav2_core::GlobalPlanner` (`configure`, `cleanup`, `activate`,
+`deactivate`, `createPlan`) and registered through `pluginlib` in `plugin.xml`.
+`createPlan` is a placeholder: it logs a warning and returns an empty path, with
+a `TODO` block suggesting the algorithm steps — that is what the user fills in.
+
+In `limo_nav2/config/nav2_params.yaml`, `planner_server.planner_plugins` became
+`["GridBased", "AStar", "RRT"]`. `GridBased` (NavFn) is still the behavior
+tree's default; switching planners is a parameter (`planner_id`), with no Nav2
+rebuild.
+
+Validated: `planner_server` loads and configures all three plugins
+(`Planner Server has GridBased AStar RRT planners available`).
+
+## 5. Forest world
+
+The contents of `FOREST_WORLDS/` were moved into the `limo_worlds` package:
+`worlds/forest_diverse_10min.sdf` and `models/` (13 models, ~307 MB, including
+the `forest-gen-models` subdirectory). `setup.py` now installs `worlds/*.sdf`
+and the whole `models/` tree (one `data_files` entry per directory, because
+setuptools `data_files` flattens files). The leftover
+`world_jean_tree/model.sdf.bak` was dropped.
+
+`launch/forest_world.launch.py` starts Gazebo with the forest world and spawns
+the LIMO, reusing `limo_car ackermann_gazebo.launch.py world:=...`. It also
+assembles `GAZEBO_MODEL_PATH` with:
+
+- `limo_worlds/models` and `limo_worlds/models/forest-gen-models` (trees);
+- `~/ws/src/mrs_gazebo_common_resources/models` and `~/ws/src`, for
+  `model://mrs_gazebo_common_resources/models/grass_plane`.
+
+`setup.sh` clones `mrs_gazebo_common_resources` (ROS 1/catkin) and creates a
+`COLCON_IGNORE` inside it: only the models matter and colcon must not try to
+build it. Validated headless: the world loads with no `model://` error and the
+LIMO spawns.
+
+**Versioning caveat:** the ~307 MB under `limo_worlds/models/` sit inside a
+package versioned in this repository. If that is too heavy for git, whether to
+ignore it (or use another strategy, such as Git LFS) is the user's call.
+
+---
+
 # Known limitations
 
 - **No `joint_state_publisher`:** `robot_state_publisher` does not animate the
@@ -725,6 +887,15 @@ where the problem actually was.
   contact becomes overlap, not collision. Enough for lidar and costmap.
 - **Nav2 has not been tested against the moving obstacles yet:** `limo_worlds`
   is validated only on the sensor side (the lidar sees the obstacle cross).
+- **A*/RRT planners are only a skeleton:** `createPlan` returns an empty path
+  (Part 9). They do not actually plan until the user implements the algorithm.
+- **Nav2 with `localization_source:=fast_lio` is not validated:** FAST_LIO is
+  not in the workspace yet; the frame/topic remapping (`camera_init -> map`,
+  `body -> base_footprint`, `/Odometry`) described in Part 9 is still to be
+  confirmed.
+- **Heavy forest world:** the Livox Mid-360 pattern (800k rays) drops the Real
+  Time Factor in the forest world (Part 9). The world and the sensor publish,
+  but the simulation is slow.
 
 # Suggested next steps
 
@@ -747,3 +918,12 @@ where the problem actually was.
    needs to localize against a map of the same room.
 7. Compare controllers (`RegulatedPurePursuit` vs `DWB` vs `TEB`) over the same
    route with a moving obstacle, to see which one reacts better.
+8. Put FAST_LIO in `ws/src/FAST_LIO` and build it (`colcon build
+   --packages-select fast_lio`), then validate `localization_source:=fast_lio`
+   and the frame/topic remapping (Part 9, item 3).
+9. Implement A* and RRT in `limo_nav2_planners` and compare them against
+   `GridBased` (NavFn) over the same route (Part 9, item 4).
+10. Run the whole flow in `forest_world.launch.py`: forest Gazebo + FAST_LIO +
+    Nav2, with a goal via `ros2 topic pub /goal_pose`, comparing RRT and A*.
+11. If the forest world gets too slow, reduce the Livox `<samples>` in the
+    `gazebo_livox` macro (Part 9, item 1).
